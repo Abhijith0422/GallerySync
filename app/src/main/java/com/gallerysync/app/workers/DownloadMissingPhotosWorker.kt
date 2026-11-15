@@ -1,0 +1,120 @@
+﻿package com.gallerysync.app.workers
+
+import android.content.ContentValues
+import android.content.Context
+import android.content.pm.ServiceInfo
+import android.provider.MediaStore
+import android.util.Log
+import androidx.work.CoroutineWorker
+import androidx.work.ForegroundInfo
+import androidx.work.WorkerParameters
+import com.gallerysync.app.R
+import com.gallerysync.app.api.BotApi
+import com.gallerysync.app.data.localdb.DbHolder
+import com.gallerysync.app.data.localdb.Preferences
+import com.gallerysync.app.data.localdb.entities.Photo
+import com.gallerysync.app.data.localdb.entities.RemotePhoto
+import com.gallerysync.app.utils.ContentHasher
+import com.gallerysync.app.utils.getMimeTypeFromExt
+import com.gallerysync.app.utils.toastFromMainThread
+import java.io.ByteArrayInputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+class DownloadMissingPhotosWorker(
+    private val context: Context,
+    params: WorkerParameters,
+) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        try {
+            setForeground(getForegroundInfo())
+        } catch (e: IllegalStateException) {
+            Log.d("DownloadMissingPhotosWorker", "doWork: ${e.localizedMessage}")
+        }
+        return withContext(Dispatchers.IO) {
+            try {
+                val deviceId = Preferences.getOrCreateDeviceId()
+
+                // Only get ACTIVE remote photos (not DELETED ones)
+                val allRemotePhotos = DbHolder.database.remotePhotoDao().getAll()
+                val allLocalPhotos = DbHolder.database.photoDao().getAll()
+                val localRemoteIds = allLocalPhotos.mapNotNull { it.remoteId }.toSet()
+                val localContentHashes = allLocalPhotos.mapNotNull { it.contentHash }.toSet()
+
+                val remotePhotosNotOnDevice = allRemotePhotos.filter { remotePhoto ->
+                    remotePhoto.remoteId !in localRemoteIds &&
+                    // Content-hash dedup: skip if same content already on device
+                    (remotePhoto.contentHash == null || remotePhoto.contentHash !in localContentHashes)
+                }
+
+                val photosToInsert = mutableListOf<Photo>()
+
+                remotePhotosNotOnDevice.forEach { remotePhoto ->
+                        val byteArray = BotApi.getFile(remotePhoto.remoteId)!!
+
+                        // Compute content hash for the downloaded file
+                        val contentHash = ContentHasher.computeHash(byteArray)
+
+                        val inStream = ByteArrayInputStream(byteArray)
+                        val contentValues = ContentValues().apply {
+                            put(
+                                MediaStore.MediaColumns.DISPLAY_NAME,
+                                context.getString(
+                                    R.string.CloudGallery,
+                                    remotePhoto.remoteId,
+                                    remotePhoto.photoType
+                                )
+                            )
+                            put(
+                                MediaStore.MediaColumns.MIME_TYPE,
+                                getMimeTypeFromExt(remotePhoto.photoType)!!
+                            )
+                            put(
+                                MediaStore.MediaColumns.RELATIVE_PATH,
+                                context.getString(R.string.download_CloudGallery)
+                            )
+                        }
+
+                        val resolver = context.contentResolver
+
+                        val uri = resolver.insert(
+                            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                            contentValues
+                        )
+                        if (uri != null) {
+                            inStream.use {
+                                resolver.openOutputStream(uri).use { outStream ->
+                                    inStream.copyTo(outStream!!)
+                                }
+                            }
+                            photosToInsert.add(
+                                Photo(
+                                    localId = uri.lastPathSegment!!,
+                                    remoteId = remotePhoto.remoteId,
+                                    photoType = remotePhoto.photoType,
+                                    pathUri = uri.toString(),
+                                    contentHash = contentHash,
+                                    uploadStatus = "DONE",
+                                    deviceId = deviceId
+                                )
+                            )
+                        }
+                    }
+                DbHolder.database.photoDao().insertPhotos(*photosToInsert.toTypedArray())
+                Result.success()
+            } catch (e: Exception) {
+                Log.d("DownloadMissingPhotosWorker", "doWork: ${e.localizedMessage}")
+                context.toastFromMainThread(e.localizedMessage)
+                Result.failure()
+            }
+        }
+    }
+
+    override suspend fun getForegroundInfo(): ForegroundInfo {
+        return createForegroundInfo(
+            context,
+            WorkModule.NOTIFICATION_ID_DOWNLOAD,
+            context.getString(R.string.downloading_photos)
+        )
+    }
+}

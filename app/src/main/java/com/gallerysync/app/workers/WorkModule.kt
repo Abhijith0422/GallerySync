@@ -1,0 +1,469 @@
+package com.gallerysync.app.workers
+
+import android.content.Context
+import android.net.Uri
+import android.provider.MediaStore
+import androidx.work.BackoffPolicy
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
+import com.gallerysync.app.data.localdb.Preferences
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flowOn
+import java.time.Duration
+
+object WorkModule {
+    private var _manager: WorkManager? = null
+    val manager: WorkManager get() = _manager ?: error("WorkManager not initialized")
+
+    fun setManagerForTesting(testManager: WorkManager) {
+        _manager = testManager
+    }
+
+    fun create(applicationContext: Context) {
+        try {
+            _manager = WorkManager.getInstance(applicationContext)
+        } catch (e: Throwable) {
+            android.util.Log.w("WorkModule", "WorkManager.getInstance() unavailable in environment: ${e.message}")
+        }
+    }
+
+    // Registry mapping work UUID → photo URI for thumbnail resolution
+    object WorkPhotoRegistry {
+        private val map = mutableMapOf<String, String>()
+        fun register(workId: String, photoUri: String) { map[workId] = photoUri }
+        fun resolve(workId: String): String? = map[workId]
+        fun remove(workId: String) { map.remove(workId) }
+    }
+
+    object PeriodicBackup {
+
+        private fun getConstraints(isManual: Boolean = false): Constraints {
+            return com.gallerysync.app.data.upload.SyncNetworkPolicy.getWorkManagerConstraints(isManual)
+        }
+
+        private fun getRepeatIntervalDays(): Long {
+            return Preferences.getString(
+                Preferences.autoBackupIntervalKey,
+                Preferences.defaultAutoBackupInterval.toString()
+            ).toLong()
+        }
+
+        fun enqueue(forceUpdate: Boolean = false, onlySchedule: Boolean = false, type: String? = null) {
+            val mgr = _manager ?: return
+            val isManual = type == "manual_backup"
+            val constraints = getConstraints(isManual)
+            val repeatIntervalDays = getRepeatIntervalDays()
+
+            // 1️⃣ Immediate one-time backup
+            if (!onlySchedule) {
+                val instantBackupRequest =
+                    OneTimeWorkRequestBuilder<PeriodicPhotoBackupWorker>()
+                        .setInputData(
+                            workDataOf(
+                                PeriodicPhotoBackupWorker.KEY_COMPRESSION_THRESHOLD to 1024 * 50L,
+                                PeriodicPhotoBackupWorker.KEY_UPLOAD_TYPE to type
+                            )
+                        )
+                        .setConstraints(constraints)
+                        .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                        .build()
+
+                mgr.enqueueUniqueWork(
+                    "InstantPhotoBackupWork",
+                    ExistingWorkPolicy.REPLACE,
+                    instantBackupRequest
+                )
+            }
+
+            // 2️⃣ Periodic backup with current preferences
+            val periodicUploadWorkRequest =
+                PeriodicWorkRequestBuilder<PeriodicPhotoBackupWorker>(Duration.ofDays(repeatIntervalDays))
+                    .setInputData(
+                        workDataOf(PeriodicPhotoBackupWorker.KEY_COMPRESSION_THRESHOLD to 1024 * 50L)
+                    )
+                    .setConstraints(getConstraints(isManual = false))
+                    .setInitialDelay(Duration.ofDays(1))
+                    .setBackoffCriteria(
+                        backoffPolicy = BackoffPolicy.LINEAR,
+                        duration = Duration.ofMinutes(40)
+                    )
+                    .build()
+
+            mgr.enqueueUniquePeriodicWork(
+                PERIODIC_PHOTO_BACKUP_WORK,
+                if (forceUpdate) ExistingPeriodicWorkPolicy.UPDATE else ExistingPeriodicWorkPolicy.KEEP,
+                periodicUploadWorkRequest
+            )
+        }
+
+        fun cancel() {
+            _manager?.cancelUniqueWork(PERIODIC_PHOTO_BACKUP_WORK)
+            _manager?.cancelUniqueWork("InstantPhotoBackupWork")
+            _manager?.cancelUniqueWork("ScheduledRetryBackupWork")
+        }
+
+        fun scheduleDelayedRetry(delayMs: Long) {
+            val mgr = _manager ?: return
+            val constraints = getConstraints(isManual = false)
+            val retryRequest = OneTimeWorkRequestBuilder<PeriodicPhotoBackupWorker>()
+                .setConstraints(constraints)
+                .setInitialDelay(Duration.ofMillis(delayMs.coerceAtLeast(1000L)))
+                .build()
+
+            // Check if a delayed retry is already enqueued to prevent unique-work policies
+            // from silently discarding active countdowns or network constraint waits.
+            val isAlreadyWaiting = try {
+                val workInfos = mgr.getWorkInfosForUniqueWork("ScheduledRetryBackupWork").get()
+                workInfos.any { it.state == androidx.work.WorkInfo.State.ENQUEUED }
+            } catch (_: Exception) {
+                false
+            }
+
+            mgr.enqueueUniqueWork(
+                "ScheduledRetryBackupWork",
+                if (isAlreadyWaiting) ExistingWorkPolicy.KEEP else ExistingWorkPolicy.REPLACE,
+                retryRequest
+            )
+        }
+    }
+
+    object SyncMediaStore {
+
+        private val periodicSyncMediaStoreRequest =
+            PeriodicWorkRequestBuilder<SyncDbMediaStoreWorker>(Duration.ofDays(1))
+                .setInitialDelay(Duration.ofDays(1))
+                .setBackoffCriteria(
+                    backoffPolicy = BackoffPolicy.LINEAR,
+                    duration = Duration.ofMinutes(40)
+                )
+                .build()
+
+        private val instantSyncMediaStoreRequest =
+            OneTimeWorkRequestBuilder<SyncDbMediaStoreWorker>()
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .build()
+
+        fun enqueuePeriodic() {
+            manager.enqueueUniquePeriodicWork(
+                SYNC_MEDIA_STORE_WORK,
+                ExistingPeriodicWorkPolicy.KEEP,
+                periodicSyncMediaStoreRequest
+            )
+        }
+
+        fun enqueueInstant() {
+            manager.enqueueUniqueWork(
+                SYNC_MEDIA_STORE_WORK,
+                ExistingWorkPolicy.REPLACE,
+                instantSyncMediaStoreRequest
+            )
+        }
+
+        fun cancel() {
+            manager.cancelUniqueWork(SYNC_MEDIA_STORE_WORK)
+        }
+    }
+
+    class InstantUpload(private val uri: Uri, private val type: String? = null) {
+
+        private val isManual = type == "manual_backup"
+        private val constraints: Constraints = com.gallerysync.app.data.upload.SyncNetworkPolicy.getWorkManagerConstraints(isManual)
+
+        private val instantUploadRequest =
+            OneTimeWorkRequestBuilder<InstantPhotoUploadWorker>()
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .setInputData(
+                    workDataOf(
+                        InstantPhotoUploadWorker.KEY_PHOTO_URI to uri.toString(),
+                        InstantPhotoUploadWorker.KEY_UPLOAD_TYPE to type
+                    )
+                )
+                .setConstraints(constraints)
+                .setBackoffCriteria(
+                    backoffPolicy = BackoffPolicy.LINEAR,
+                    duration = Duration.ofMinutes(2)
+                )
+                .addTag("instant_upload")
+                .apply {
+                    if (type != null) addTag(type)
+                }
+                .build()
+
+        fun enqueue() {
+            val mgr = _manager ?: return
+            val workId = instantUploadRequest.id.toString()
+            mgr.enqueueUniqueWork(
+                "$UPLOADING_ID:${uri.lastPathSegment}",
+                ExistingWorkPolicy.KEEP,
+                instantUploadRequest
+            )
+            WorkPhotoRegistry.register(workId, uri.toString())
+        }
+
+        fun cancel() {
+            _manager?.cancelUniqueWork("$UPLOADING_ID:${uri.lastPathSegment}")
+        }
+    }
+
+    class InstantDownload(private val remoteId: String, private val forceDownload: Boolean = false) {
+
+        private val constraints: Constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        private val instantDownloadRequest =
+            OneTimeWorkRequestBuilder<InstantPhotoDownloadWorker>()
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .setInputData(
+                    workDataOf(
+                        InstantPhotoDownloadWorker.KEY_REMOTE_ID to remoteId,
+                        InstantPhotoDownloadWorker.KEY_FORCE_DOWNLOAD to forceDownload
+                    )
+                )
+                .setConstraints(constraints)
+                .build()
+
+        fun enqueue() {
+            manager.enqueueUniqueWork(
+                "$DOWNLOADING_ID:$remoteId",
+                if (forceDownload) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
+                instantDownloadRequest
+            )
+        }
+
+        fun cancel() {
+            manager.cancelUniqueWork("$DOWNLOADING_ID:$remoteId")
+        }
+    }
+
+    object RestoreMissingFromDevice {
+
+        private val constraints: Constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        private val instantUploadRequest =
+            OneTimeWorkRequestBuilder<DownloadMissingPhotosWorker>()
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .setConstraints(constraints)
+                .build()
+
+        fun enqueue() {
+            manager.enqueueUniqueWork(
+                RESTORE_ALL_PHOTOS_WORK,
+                ExistingWorkPolicy.KEEP,
+                instantUploadRequest
+            )
+        }
+
+        fun cancel() {
+            manager.cancelUniqueWork(RESTORE_ALL_PHOTOS_WORK)
+        }
+    }
+
+    object PeriodicDbExport {
+
+        private val repeatIntervalDays = Preferences.getString(
+            Preferences.autoExportDatabaseIntervalKey,
+            Preferences.defaultAutoBackupInterval.toString()
+        ).toLong()
+
+        private val uri = Preferences.getString(
+            Preferences.autoExportDatabseLocation,
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI.toString()
+        )
+
+        private val periodicDbExportRequest =
+            PeriodicWorkRequestBuilder<PeriodicDbExportWorker>(Duration.ofDays(repeatIntervalDays))
+                .setInputData(
+                    workDataOf(PeriodicDbExportWorker.KEY_URI to uri)
+                )
+                .setBackoffCriteria(
+                    backoffPolicy = BackoffPolicy.EXPONENTIAL,
+                    duration = Duration.ofMinutes(10)
+                )
+                .build()
+
+        fun enqueue(forceUpdate: Boolean = false) {
+            manager.enqueueUniquePeriodicWork(
+                PERIODIC_DB_EXPORT_WORK,
+                if (forceUpdate) ExistingPeriodicWorkPolicy.UPDATE else ExistingPeriodicWorkPolicy.KEEP,
+                periodicDbExportRequest
+            )
+        }
+
+        fun cancel() {
+            manager.cancelUniqueWork(PERIODIC_DB_EXPORT_WORK)
+        }
+    }
+
+    object HashBackfill {
+        private val constraints = Constraints.Builder()
+            .setRequiresBatteryNotLow(true)
+            .build()
+
+        fun enqueue() {
+            val request = OneTimeWorkRequestBuilder<HashBackfillWorker>()
+                .setConstraints(constraints)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, Duration.ofMinutes(15))
+                .build()
+
+            manager.enqueueUniqueWork(
+                HASH_BACKFILL_WORK,
+                ExistingWorkPolicy.KEEP,
+                request
+            )
+        }
+
+        fun cancel() {
+            manager.cancelUniqueWork(HASH_BACKFILL_WORK)
+        }
+    }
+
+    object DailyDatabaseBackup {
+        private val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        private val dailyBackupRequest = PeriodicWorkRequestBuilder<DailyDatabaseBackupWorker>(
+            Duration.ofDays(1)
+        )
+            .setConstraints(constraints)
+            .setInitialDelay(Duration.ofHours(1))
+            .build()
+
+        fun enqueuePeriodic() {
+            if (!Preferences.getBoolean(Preferences.isAutoCloudBackupEnabledKey, true)) {
+                return
+            }
+            manager.enqueueUniquePeriodicWork(
+                DAILY_DATABASE_BACKUP_WORK,
+                ExistingPeriodicWorkPolicy.KEEP,
+                dailyBackupRequest
+            )
+        }
+
+        fun cancel() {
+            manager.cancelUniqueWork(DAILY_DATABASE_BACKUP_WORK)
+        }
+    }
+
+    object UploadQueueCleanup {
+        /**
+         * Cleans up completed upload_queue entries older than 7 days.
+         * Called from DailyDatabaseBackupWorker or on app launch.
+         */
+        suspend fun cleanup() {
+            try {
+                val sevenDaysAgo = System.currentTimeMillis() - (7 * 24 * 60 * 60 * 1000L)
+                com.gallerysync.app.data.localdb.DbHolder.database.uploadQueueDao().cleanupOld(sevenDaysAgo)
+            } catch (e: Exception) {
+                android.util.Log.e("UploadQueueCleanup", "Failed to clean up old queue entries", e)
+            }
+        }
+    }
+
+    object CloudPhotoSync {
+        private val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiresBatteryNotLow(true)
+            .build()
+
+        private val periodicCloudSyncRequest =
+            PeriodicWorkRequestBuilder<CloudPhotoSyncWorker>(Duration.ofDays(1))
+                .setConstraints(constraints)
+                .setInitialDelay(Duration.ofMinutes(30))
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, Duration.ofMinutes(15))
+                .build()
+
+        fun enqueue() {
+            manager.enqueueUniquePeriodicWork(
+                CLOUD_PHOTO_SYNC_WORK,
+                ExistingPeriodicWorkPolicy.KEEP,
+                periodicCloudSyncRequest
+            )
+        }
+
+        fun cancel() {
+            manager.cancelUniqueWork(CLOUD_PHOTO_SYNC_WORK)
+        }
+
+        fun enqueueOneTime() {
+            val oneTimeRequest = OneTimeWorkRequestBuilder<CloudPhotoSyncWorker>()
+                .setConstraints(constraints)
+                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, Duration.ofMinutes(5))
+                .build()
+
+            manager.enqueueUniqueWork(
+                CLOUD_PHOTO_SYNC_ONE_TIME_WORK,
+                ExistingWorkPolicy.REPLACE,
+                oneTimeRequest
+            )
+        }
+    }
+
+    object QuickCloudSync {
+        private val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        private val periodicQuickSyncRequest =
+            PeriodicWorkRequestBuilder<QuickCloudSyncWorker>(Duration.ofHours(6))
+                .setConstraints(constraints)
+                .setInitialDelay(Duration.ofHours(1))
+                .build()
+
+        fun enqueue() {
+            manager.enqueueUniquePeriodicWork(
+                QUICK_CLOUD_SYNC_WORK,
+                ExistingPeriodicWorkPolicy.KEEP,
+                periodicQuickSyncRequest
+            )
+        }
+
+        fun cancel() {
+            manager.cancelUniqueWork(QUICK_CLOUD_SYNC_WORK)
+        }
+    }
+
+    fun observeWorkerByName(name: String) = manager.getWorkInfosForUniqueWorkFlow(name)
+        .flowOn(Dispatchers.IO)
+
+    fun observeWorkerByTag(tag: String) = manager.getWorkInfosByTagFlow(tag)
+        .flowOn(Dispatchers.IO)
+
+    const val PERIODIC_PHOTO_BACKUP_WORK = "PeriodicPhotoBackupWork"
+    const val SYNC_MEDIA_STORE_WORK = "SyncMediaStoreWork"
+    const val RESTORE_ALL_PHOTOS_WORK = "RestoreAllPhotosWork"
+    const val PERIODIC_DB_EXPORT_WORK = "PeriodicDbExportWork"
+    const val HASH_BACKFILL_WORK = "HashBackfillWork"
+    const val CLOUD_PHOTO_SYNC_WORK = "CloudPhotoSyncWork"
+    const val CLOUD_PHOTO_SYNC_ONE_TIME_WORK = "CloudPhotoSyncOneTimeWork"
+    const val QUICK_CLOUD_SYNC_WORK = "QuickCloudSyncWork"
+    const val DAILY_DATABASE_BACKUP_WORK = "DailyDatabaseBackupWork"
+    const val UPLOADING_ID = "UploadingId"
+    const val DOWNLOADING_ID = "DownloadingId"
+    
+    val VERBOSE_NOTIFICATION_CHANNEL_NAME: CharSequence = "Verbose WorkManager Notifications"
+    const val VERBOSE_NOTIFICATION_CHANNEL_DESCRIPTION = "Shows notifications whenever work starts"
+    val NOTIFICATION_TITLE: CharSequence = "GallerySync"
+    const val CHANNEL_ID = "VERBOSE_WHITE_HOLE_APP_NOTIFICATION"
+
+    // Unique Notification IDs
+    const val NOTIFICATION_ID_BACKUP = 101
+    const val NOTIFICATION_ID_SYNC = 102
+    const val NOTIFICATION_ID_DOWNLOAD = 103
+    const val NOTIFICATION_ID_UPLOAD = 104
+    const val NOTIFICATION_ID_EXPORT = 105
+    const val NOTIFICATION_ID_GENERIC = 100
+    
+    @Deprecated("Use unique IDs instead")
+    const val NOTIFICATION_ID = 1
+}
