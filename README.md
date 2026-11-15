@@ -18,7 +18,6 @@
 
   <img src="https://hits.sh/github.com/AKS-Labs/CloudGallery.svg?style=for-the-badge&label=Page%20Views&extraCount=2000&color=ff3f6f&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJzdmctaWNvbiIgc3R5bGU9IndpZHRoOiAxZW07IGhlaWdodDogMWVtO3ZlcnRpY2FsLWFsaWduOiBtaWRkbGU7ZmlsbDojZmZmZmZmO292ZXJmbG93OiBoaWRkZW47IiB2aWV3Qm94PSIwIDAgMTAyNCAxMDI0IiB2ZXJzaW9uPSIxLjEiPjxwYXRoIGQ9Ik01MTIgMzg0YTEyOCAxMjggMCAwIDAtMTI4IDEyOCAxMjggMTI4IDAgMCAwIDEyOCAxMjggMTI4IDEyOCAwIDAgMCAxMjgtMTI4IDEyOCAxMjggMCAwIDAtMTI4LTEyOG0wIDM0MS4zMzMzMzNhMjEzLjMzMzMzMyAyMTMuMzMzMzMzIDAgMCAxLTIxMy4zMzMzMzMtMjEzLjMzMzMzMyAyMTMuMzMzMzMzIDIxMy4zMzMzMzMgMCAwIDEgMjEzLjMzMzMzMy0yMTMuMzMzMzMzIDIxMy4zMzMzMzMgMjEzLjMzMzMzMyAwIDAgMSAyMTMuMzMzMzMzIDIxMy4zMzMzMzMgMjEzLjMzMzMzMyAyMTMuMzMzMzMzIDAgMCAxLTIxMy4zMzMzMzMgMjEzLjMzMzMzM20wLTUzMy4zMzMzMzNDMjk4LjY2NjY2NyAxOTIgMTE2LjQ4IDMyNC42OTMzMzMgNDIuNjY2NjY3IDUxMmM3My44MTMzMzMgMTg3LjMwNjY2NyAyNTYgMzIwIDQ2OS4zMzMzMzMgMzIwczM5NS41Mi0xMzIuNjkzMzMzIDQ2OS4zMzMzMzMtMzIwYy03My44MTMzMzMtMTg3LjMwNjY2Ny0yNTYtMzIwLTQ2OS4zMzMzMzMtMzIweiIgZmlsbD0iIi8%2BPC9zdmc%2B&labelColor=870b2a"/>
 
-
 <a href="https://github.com/AKS-Labs/CloudGallery/releases">
   
   <img src="https://img.shields.io/github/downloads/AKS-Labs/CloudGallery/total?color=ff9500&style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHRpdGxlPmRvd25sb2FkPC90aXRsZT48cGF0aCBkPSJNNSwyMEgxOVYxOEg1TTE5LDlIMTVWM0g5VjlINUwxMiwxNkwxOSw5WiIgZmlsbD0id2hpdGUiIC8+PC9zdmc+&labelColor=a6660d"/>
@@ -45,13 +44,11 @@
 
 ## 🌟 What is CloudGallery?
 
-**Chitralaya CloudGallery** is a simple open-source Android app  
-that turns your Telegram account into a private photo cloud storage — no signup, no servers, no tracking.
+**Chitralaya CloudGallery** is an open-source Android application that turns your Telegram account into a private photo and video cloud storage — no third-party signup, no intermediate servers, and no telemetry.
 
-Your photos go straight from your phone to your own Telegram chat,  
-giving you free, practically unlimited backup space with full control over your data.
+Your media is transmitted straight from your phone to your own private Telegram channel or group, providing free, unlimited backup space with full control over your data.
 
-It’s not a company or a service — just a open-source tool made by a privacy-minded developer who believes your memories should stay _yours_.
+> **Original Work Attribution**: This project is originally derived from and built upon the foundational open-source architecture of the **[Whitehole](https://github.com/beradeep/whitehole/)** project created by **Deep Bera ([@beradeep](https://github.com/beradeep))**, made available under the Apache License 2.0. We gratefully acknowledge and credit Deep Bera's pioneering work in transforming Telegram into an Android photo backup solution.
 
 ---
 
@@ -94,17 +91,14 @@ And then I looked at Telegram.
 
 ---
 
-
 ## 🔒 Privacy, Security & Telegram Architecture
 
 **Transparency First**: GallerySync is an open-source backup tool designed to give you direct control of your media without intermediary third-party clouds. To make an informed decision, here is exactly how media transfer, storage, and privacy operate:
-
 
 ### 1. Direct Transmission via Telegram Bot API
 
 - All photos and videos are transmitted directly from your Android device to Telegram’s official Bot API servers (`api.telegram.org`) over TLS/HTTPS.
 - Uploads are directed exclusively to your own user-configured private channel or group.
-
 
 ### 2. Telegram Server Storage & Encryption Model
 
@@ -112,24 +106,20 @@ And then I looked at Telegram.
 - While data is encrypted in transit and stored securely on Telegram's cloud storage servers, Telegram processes and stores your media, and Telegram infrastructure holds the technical keys to process those messages.
 - If you require zero-knowledge encryption where cloud providers cannot read the file data under any circumstances, note that **on-device pre-upload encryption is a planned future enhancement**, not a present capability. Today, media is uploaded in its original format.
 
-
 ### 3. Channel Access Boundary
 
 - Media uploaded to your Telegram channel is accessible to **anyone with access to that channel** (channel administrators, members, or invitees).
 - Keep your private channel strictly restricted to yourself (and trusted recipients you intentionally add).
-
 
 ### 4. Zero Intermediary Servers or Telemetry
 
 - **No Third-Party Infrastructure**: GallerySync operates no storage servers, telemetry services, crash analytics, user accounts, or proxy infrastructure.
 - The app never communicates with any third-party servers. All interactions occur solely between your device and Telegram.
 
-
 ### 5. Local Credential Security
 
 - Your Telegram Bot Token, Private Channel Chat ID, and Forum Topic ID are encrypted on-device using the **Android Keystore (AES-256 GCM)** via `EncryptedSharedPreferences`.
 - Credentials are never exposed in log output or sent to any server other than Telegram's official API.
-
 
 ### 6. Local Database & Metadata Persistence
 
@@ -277,13 +267,21 @@ Join the community → [t.me/AKSLabs](https://t.me/AKSLabs)
 
 ---
 
-## 🙏 **Credits**
 
-## Credits
+## 🙏 **Credits & Attribution**
 
-- [Whitehole Project](https://github.com/beradeep/whitehole/) for the base code.
-- [kotlin-telegram-bot](https://github.com/kotlin-telegram-bot) for the Telegram bot library.
-- [Material Icons](https://material.io/resources/icons/) for the icons.
+This project is built on the foundations and contributions of the open-source community:
+
+- **[Whitehole](https://github.com/beradeep/whitehole/)** by **Deep Bera ([@beradeep](https://github.com/beradeep))**:
+    - **Original Work & Architecture**: The core concept, early MediaStore indexing implementation, and Room database architecture (`wh_database`) were originally authored and open-sourced by Deep Bera in the Whitehole project.
+    - **License**: Derived under the terms of the [Apache License, Version 2.0](LICENSE-APACHE-2.0.md).
+    - We express our sincere gratitude to Deep Bera for creating and sharing the foundational codebase.
+- **[kotlin-telegram-bot](https://github.com/kotlin-telegram-bot/kotlin-telegram-bot)**:
+    - Kotlin wrapper library for Telegram Bot API communication and command dispatching.
+- **Google Material Design**:
+    - [Material Icons](https://material.io/resources/icons/) and Material 3 design system for UI components.
+- **Android Jetpack & Libraries**:
+    - Jetpack Compose, Room Database, WorkManager, OkHttp, Retrofit, and Coil.
 
 ---
 
