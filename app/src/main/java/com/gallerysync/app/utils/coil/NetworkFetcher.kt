@@ -1,4 +1,4 @@
-﻿package com.gallerysync.app.utils.coil
+package com.gallerysync.app.utils.coil
 
 import android.util.Log
 import coil.ImageLoader
@@ -19,27 +19,45 @@ import com.gallerysync.app.utils.getMimeTypeFromExt
 data class FileIdData(val fileId: String)
 
 class NetworkFetcher(
-    private val botApi: BotApi = BotApi,
     private val remotePhoto: RemotePhoto,
     private val options: Options,
+    private val fileFetcher: suspend (String) -> ByteArray? = { BotApi.getFile(it) }
 ) : Fetcher {
+
+    constructor(
+        botApi: BotApi,
+        remotePhoto: RemotePhoto,
+        options: Options
+    ) : this(remotePhoto, options, { botApi.getFile(it) })
+
     override suspend fun fetch(): FetchResult? {
+        val isVideo = remotePhoto.mediaType == "VIDEO"
+        // For video files, only fetch the thumbnail (previewRemoteId). Never attempt to download the full video file.
+        val targetFileId = if (isVideo) {
+            remotePhoto.previewRemoteId ?: run {
+                Log.d(TAG, "🌐 Video ${remotePhoto.remoteId} has no previewRemoteId; skipping thumbnail network fetch")
+                return null
+            }
+        } else {
+            remotePhoto.previewRemoteId ?: remotePhoto.remoteId
+        }
+
         Log.d(TAG, "🌐 === NETWORK FETCHER START ===")
-        Log.d(TAG, "🌐 Fetching image for remoteId: ${remotePhoto.remoteId}")
+        Log.d(TAG, "🌐 Fetching image for targetFileId: $targetFileId (remoteId: ${remotePhoto.remoteId}, mediaType: ${remotePhoto.mediaType})")
         Log.d(TAG, "🌐 Photo type: ${remotePhoto.photoType}")
         Log.d(TAG, "🌐 Photo fileName: ${remotePhoto.fileName}")
         Log.d(TAG, "🌐 Photo fileSize: ${remotePhoto.fileSize}")
         Log.d(TAG, "🌐 Request size: ${options.size}")
 
         return try {
-            Log.i(TAG, "🌐 Calling BotApi.getFile for remoteId: ${remotePhoto.remoteId}")
+            Log.i(TAG, "🌐 Calling fileFetcher for targetFileId: $targetFileId")
             val startTime = System.currentTimeMillis()
-            val byteArray = botApi.getFile(remotePhoto.remoteId)
+            val byteArray = fileFetcher(targetFileId)
             val endTime = System.currentTimeMillis()
 
             if (byteArray != null) {
-                Log.i(TAG, "🌐 ✅ SUCCESS: Downloaded ${byteArray.size} bytes in ${endTime - startTime}ms for remoteId: ${remotePhoto.remoteId}")
-                val mimeType = getMimeTypeFromExt(remotePhoto.photoType)
+                Log.i(TAG, "🌐 ✅ SUCCESS: Downloaded ${byteArray.size} bytes in ${endTime - startTime}ms for targetFileId: $targetFileId")
+                val mimeType = if (isVideo) "image/jpeg" else getMimeTypeFromExt(remotePhoto.photoType)
                 Log.d(TAG, "🌐 Detected MIME type: $mimeType")
 
                 val buffer = okio.Buffer().write(byteArray)
@@ -48,16 +66,16 @@ class NetworkFetcher(
                     mimeType = mimeType,
                     dataSource = DataSource.NETWORK
                 )
-                Log.i(TAG, "🌐 Created SourceResult for remoteId: ${remotePhoto.remoteId}")
+                Log.i(TAG, "🌐 Created SourceResult for targetFileId: $targetFileId")
                 Log.d(TAG, "🌐 === NETWORK FETCHER SUCCESS ===")
                 result
             } else {
-                Log.e(TAG, "🌐 ❌ FAILED: BotApi.getFile returned null for remoteId: ${remotePhoto.remoteId}")
+                Log.e(TAG, "🌐 ❌ FAILED: BotApi.getFile returned null for targetFileId: $targetFileId")
                 Log.d(TAG, "🌐 === NETWORK FETCHER FAILED ===")
                 null
             }
         } catch (e: Exception) {
-            Log.e(TAG, "🌐 ❌ EXCEPTION in NetworkFetcher for remoteId: ${remotePhoto.remoteId}", e)
+            Log.e(TAG, "🌐 ❌ EXCEPTION in NetworkFetcher for targetFileId: $targetFileId", e)
             Log.d(TAG, "🌐 === NETWORK FETCHER EXCEPTION ===")
             null
         }
@@ -100,6 +118,10 @@ class FileIdFetcher(
     private val options: Options,
 ) : Fetcher {
     override suspend fun fetch(): FetchResult? {
+        if (fileId.isBlank()) {
+            Log.d(TAG, "🌐 FileIdFetcher: blank fileId passed; returning null")
+            return null
+        }
         Log.d(TAG, "🌐 === FILE ID FETCHER START ===")
         Log.d(TAG, "🌐 Fetching image for fileId: $fileId")
         Log.d(TAG, "🌐 Request size: ${options.size}")

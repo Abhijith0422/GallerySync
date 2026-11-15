@@ -1,4 +1,4 @@
-﻿package com.gallerysync.app.ui.main.screens.remote
+package com.gallerysync.app.ui.main.screens.remote
 
 import android.app.Activity
 import android.content.Context
@@ -367,33 +367,36 @@ fun RemotePhotosGrid(
                                 yield() // Allow other background tasks to breathe
                                 when (val item = currentLayoutItems[index]) {
                                     is RemoteGridItem.PhotoItem -> {
-                                        val previewFileId = item.photo.previewRemoteId ?: item.photo.remoteId
-                                        val fileIdData = com.gallerysync.app.utils.coil.FileIdData(previewFileId)
-                                        val microRequest = ImageRequest.Builder(context)
-                                            .data(fileIdData)
-                                            .size(64, 64)
-                                            .memoryCacheKey("fid_${previewFileId}_64")
-                                            .diskCacheKey("fid_$previewFileId")
-                                            .allowHardware(true)
-                                            .bitmapConfig(android.graphics.Bitmap.Config.RGB_565)
-                                            .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
-                                            .diskCachePolicy(coil.request.CachePolicy.ENABLED)
-                                            .build()
-                                        ImageLoaderModule.thumbnailImageLoader.enqueue(microRequest)
-
-                                        // Prefetch full thumbnails for immediate next items
-                                        if (index <= lastIndex + 10) {
-                                            val thumbRequest = ImageRequest.Builder(context)
+                                        val isVideo = item.photo.mediaType == "VIDEO"
+                                        val previewFileId = if (isVideo) item.photo.previewRemoteId else (item.photo.previewRemoteId ?: item.photo.remoteId)
+                                        if (previewFileId != null) {
+                                            val fileIdData = com.gallerysync.app.utils.coil.FileIdData(previewFileId)
+                                            val microRequest = ImageRequest.Builder(context)
                                                 .data(fileIdData)
-                                                .size(180, 180)
-                                                .memoryCacheKey("fid_${previewFileId}_180")
+                                                .size(64, 64)
+                                                .memoryCacheKey("fid_${previewFileId}_64")
                                                 .diskCacheKey("fid_$previewFileId")
                                                 .allowHardware(true)
                                                 .bitmapConfig(android.graphics.Bitmap.Config.RGB_565)
                                                 .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
                                                 .diskCachePolicy(coil.request.CachePolicy.ENABLED)
                                                 .build()
-                                            ImageLoaderModule.thumbnailImageLoader.enqueue(thumbRequest)
+                                            ImageLoaderModule.thumbnailImageLoader.enqueue(microRequest)
+
+                                            // Prefetch full thumbnails for immediate next items
+                                            if (index <= lastIndex + 10) {
+                                                val thumbRequest = ImageRequest.Builder(context)
+                                                    .data(fileIdData)
+                                                    .size(180, 180)
+                                                    .memoryCacheKey("fid_${previewFileId}_180")
+                                                    .diskCacheKey("fid_$previewFileId")
+                                                    .allowHardware(true)
+                                                    .bitmapConfig(android.graphics.Bitmap.Config.RGB_565)
+                                                    .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                                                    .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                                                    .build()
+                                                ImageLoaderModule.thumbnailImageLoader.enqueue(thumbRequest)
+                                            }
                                         }
                                     }
                                     else -> {}
@@ -630,13 +633,18 @@ fun CloudPhotoItem(
             LoadAnimation(modifier = Modifier.size(48.dp))
 
             if (remotePhoto != null) {
-                val fileId = remotePhoto.previewRemoteId ?: remotePhoto.remoteId
+                val isVideo = remotePhoto.mediaType == "VIDEO"
+                val fileId = if (isVideo) remotePhoto.previewRemoteId else (remotePhoto.previewRemoteId ?: remotePhoto.remoteId)
                 val imageRequest = remember(fileId) {
                     ImageRequest.Builder(context)
-                        .data(com.gallerysync.app.utils.coil.FileIdData(fileId))
+                        .data(fileId?.let { com.gallerysync.app.utils.coil.FileIdData(it) })
                         .size(180, 180)
-                        .memoryCacheKey("fid_${fileId}_180")
-                        .diskCacheKey("fid_$fileId")
+                        .apply {
+                            if (fileId != null) {
+                                memoryCacheKey("fid_${fileId}_180")
+                                diskCacheKey("fid_$fileId")
+                            }
+                        }
                         .allowHardware(true)
                         .bitmapConfig(android.graphics.Bitmap.Config.RGB_565)
                         .crossfade(200)

@@ -1,4 +1,4 @@
-﻿package com.gallerysync.app.ui.onboarding
+package com.gallerysync.app.ui.onboarding
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -111,7 +111,7 @@ fun DisclaimerScreen(
 //            Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = "Chitralaya",
+                text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.displaySmall.copy(
                     fontWeight = FontWeight.Black,
                     letterSpacing = (-1).sp

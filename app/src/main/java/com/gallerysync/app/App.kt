@@ -38,7 +38,7 @@ class App : Application(), androidx.work.Configuration.Provider {
 
         try {
             WorkModule.create(applicationContext)
-        } catch (e: Throwable) {
+        } catch (e: Exception) {
             android.util.Log.w("App", "WorkModule init skipped in headless environment: ${e.message}")
         }
         ImageLoaderModule.create(applicationContext)

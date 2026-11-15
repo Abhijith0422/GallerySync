@@ -24,12 +24,66 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
+
+/**
+ * Reusable duration formatter for media items.
+ * MediaStore and Room database duration is stored in milliseconds.
+ */
+object DurationFormatter {
+    /**
+     * Formats duration in milliseconds (as stored in MediaStore and Room) to "mm:ss" or "h:mm:ss".
+     * Expected examples:
+     * - 0 ms (0 sec) -> "00:00"
+     * - 74_000 ms (74 sec) -> "01:14"
+     * - 125_000 ms (125 sec) -> "02:05"
+     * - 3_661_000 ms (3661 sec) -> "1:01:01"
+     * Null, zero, and negative values return "00:00".
+     */
+    fun formatDurationMillis(durationMs: Long?): String {
+        if (durationMs == null || durationMs <= 0L) return "00:00"
+        val totalSeconds = (durationMs + 500L) / 1000L
+        return formatDurationSeconds(totalSeconds)
+    }
+
+    /**
+     * Formats duration in seconds to "mm:ss" or "h:mm:ss".
+     * Expected examples:
+     * - 0 seconds -> "00:00"
+     * - 74 seconds -> "01:14"
+     * - 125 seconds -> "02:05"
+     * - 3661 seconds -> "1:01:01"
+     * Null, zero, and negative values return "00:00".
+     */
+    fun formatDurationSeconds(seconds: Long?): String {
+        if (seconds == null || seconds <= 0L) return "00:00"
+        val hours = seconds / 3600L
+        val minutes = (seconds % 3600L) / 60L
+        val remainingSeconds = seconds % 60L
+        return if (hours > 0) {
+            String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, remainingSeconds)
+        } else {
+            String.format(Locale.getDefault(), "%02d:%02d", minutes, remainingSeconds)
+        }
+    }
+
+    /**
+     * Formats video duration. Defaults to project database unit (milliseconds).
+     */
+    fun formatDuration(durationMs: Long?): String = formatDurationMillis(durationMs)
+}
+
+/**
+ * Reusable top-level duration formatter helper.
+ */
+fun formatDuration(durationMs: Long?): String = DurationFormatter.formatDuration(durationMs)
 
 data class UploadUiItem(
     val id: String,
@@ -45,8 +99,18 @@ data class UploadUiItem(
     val localId: String? = null,
     val speed: String? = null,
     val eta: String? = null,
-    val timestamp: Long = System.currentTimeMillis()
-)
+    val timestamp: Long = System.currentTimeMillis(),
+    val isVideo: Boolean = false,
+    val duration: Long? = null,
+    val width: Int? = null,
+    val height: Int? = null
+) {
+    companion object {
+        fun formatDuration(durationMs: Long?): String = DurationFormatter.formatDuration(durationMs)
+        fun formatDurationMillis(durationMs: Long?): String = DurationFormatter.formatDurationMillis(durationMs)
+        fun formatDurationSeconds(seconds: Long?): String = DurationFormatter.formatDurationSeconds(seconds)
+    }
+}
 
 enum class UploadType {
     Selective,   // User manually chose these
@@ -62,7 +126,12 @@ enum class UploadStatus {
     Cancelled
 }
 
-class ManageUploadsViewModel(application: Application) : AndroidViewModel(application) {
+class ManageUploadsViewModel(
+    application: Application,
+    coroutineScope: kotlinx.coroutines.CoroutineScope? = null
+) : AndroidViewModel(application) {
+
+    private val scope: kotlinx.coroutines.CoroutineScope = coroutineScope ?: viewModelScope
 
     // UI-dismissed synced item IDs — persisted in SharedPreferences across app relaunches
     private val _dismissedIds = MutableStateFlow<Set<String>>(
@@ -75,26 +144,31 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
     // Retrying work IDs — items currently being retried (shown as Queued instantly)
     private val _retryingIds = MutableStateFlow<Set<String>>(emptySet())
 
-    init {
-        viewModelScope.launch {
-            val oneDayAgo = System.currentTimeMillis() - 24 * 60 * 60 * 1000
-            DbHolder.database.remotePhotoDao().deleteOlderThan(oneDayAgo)
-        }
+    private val workManager: WorkManager? = try {
+        WorkManager.getInstance(application)
+    } catch (e: IllegalStateException) {
+        Log.w("ManageUploadsVM", "WorkManager not initialized in environment: ${e.message}")
+        null
+    } catch (e: Exception) {
+        Log.w("ManageUploadsVM", "WorkManager unavailable: ${e.message}")
+        null
     }
 
-    private val workManager = WorkManager.getInstance(application)
-
     // Observe manual backups (tagged "manual_backup")
-    private val manualBackupFlow = workManager.getWorkInfosByTagFlow("manual_backup")
+    private val manualBackupFlow = (workManager?.getWorkInfosByTagFlow("manual_backup") ?: kotlinx.coroutines.flow.flowOf(emptyList()))
+        .onStart { emit(emptyList()) }
 
     // Observe instant uploads (tagged "instant_upload")
-    private val instantUploadFlow = workManager.getWorkInfosByTagFlow("instant_upload")
+    private val instantUploadFlow = (workManager?.getWorkInfosByTagFlow("instant_upload") ?: kotlinx.coroutines.flow.flowOf(emptyList()))
+        .onStart { emit(emptyList()) }
 
     // Observe periodic/auto backups (by unique work name)
-    private val periodicBackupFlow = workManager.getWorkInfosForUniqueWorkFlow(WorkModule.PERIODIC_PHOTO_BACKUP_WORK)
+    private val periodicBackupFlow = (workManager?.getWorkInfosForUniqueWorkFlow(WorkModule.PERIODIC_PHOTO_BACKUP_WORK) ?: kotlinx.coroutines.flow.flowOf(emptyList()))
+        .onStart { emit(emptyList()) }
 
     // All uploads from DB (RemotePhoto table)
     private val remotePhotosFlow = DbHolder.database.remotePhotoDao().getAllFlow()
+        .onStart { emit(emptyList()) }
  
     // Track start times for running workers to calculate speed/ETA
     private val workStartTimes = mutableMapOf<UUID, Long>()
@@ -117,7 +191,7 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
 
     // Inside ManageUploadsViewModel.kt
     fun refresh() {
-        viewModelScope.launch {
+        scope.launch {
             _isRefreshing.value = true
             // Call your data loading logic here
             // loadUploads()
@@ -138,14 +212,14 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
 
     fun batchClearHistory() {
         val idsToClear = _selectedIds.value.toList()
-        viewModelScope.launch {
+        scope.launch {
             DbHolder.database.remotePhotoDao().deleteByRemoteIds(idsToClear)
         }
         // Also try to cancel/prune any work items selected
         _selectedIds.value.forEach { id ->
             val uuid = try { UUID.fromString(id) } catch (e: Exception) { null }
             if (uuid != null) {
-                workManager.cancelWorkById(uuid)
+                workManager?.cancelWorkById(uuid)
             }
         }
         clearSelection()
@@ -159,23 +233,33 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
     private var recentlyDeletedItem: com.gallerysync.app.data.localdb.entities.RemotePhoto? = null
     private var undoJob: Job? = null
 
-    private val remoteToLocalPathMapFlow: StateFlow<Map<String, String>> = DbHolder.database.photoDao().getAllFlow()
-        .map { photos -> 
-            photos.filter { it.remoteId != null }.associate { it.remoteId!! to it.pathUri }
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+    data class LocalPhotoLookups(
+        val pathMap: Map<String, String> = emptyMap(),
+        val idMap: Map<String, String> = emptyMap(),
+        val photosByLocalId: Map<String, Photo> = emptyMap()
+    )
 
-    private val remoteToLocalIdMapFlow: StateFlow<Map<String, String>> = DbHolder.database.photoDao().getAllFlow()
-        .map { photos ->
-            photos.filter { it.remoteId != null }.associate { it.remoteId!! to it.localId }
+    private val localPhotoLookupsFlow: Flow<LocalPhotoLookups> = DbHolder.database.photoDao().getAllFlow()
+        .onStart { emit(emptyList()) }
+        .map { photos -> 
+            val pathMap = photos.filter { it.remoteId != null }.associate { it.remoteId!! to it.pathUri }
+            val idMap = photos.filter { it.remoteId != null }.associate { it.remoteId!! to it.localId }
+            val photosByLocalId = photos.associateBy { it.localId }
+            LocalPhotoLookups(pathMap, idMap, photosByLocalId)
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    private val remoteToLocalPathMapFlow: Flow<Map<String, String>> = localPhotoLookupsFlow
+        .map { it.pathMap }
+
+    private val remoteToLocalIdMapFlow: Flow<Map<String, String>> = localPhotoLookupsFlow
+        .map { it.idMap }
 
     // Queued Photos (from DB — not yet uploaded, excluding excluded folders)
     val queuedPhotos: StateFlow<List<Photo>> = DbHolder.database.photoDao().getAllNotUploadedFlow()
+        .onStart { emit(emptyList()) }
         .map { photos -> filterExcludedBucketPhotos(photos) }
         .flowOn(Dispatchers.IO)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private suspend fun filterExcludedBucketPhotos(photos: List<Photo>): List<Photo> {
         if (photos.isEmpty()) return photos
@@ -213,21 +297,23 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
         manualBackupFlow,
         instantUploadFlow,
         periodicBackupFlow,
-        remoteToLocalPathMapFlow,
+        localPhotoLookupsFlow,
         _dismissedWorkIds
-    ) { manual, instant, periodic, localMap, dismissedIds ->
+    ) { manual, instant, periodic, lookups, dismissedIds ->
         val workMap = mutableMapOf<UUID, Pair<WorkInfo, UploadType>>()
         manual.forEach { workMap[it.id] = it to UploadType.Selective }
         instant.forEach { if (!workMap.containsKey(it.id)) workMap[it.id] = it to UploadType.Instant }
         periodic.forEach { if (!workMap.containsKey(it.id)) workMap[it.id] = it to UploadType.Background }
         workMap.values.mapNotNull { (info, type) -> 
-            val item = mapWorkInfoToUiItem(info, type, localMap)
+            val item = mapWorkInfoToUiItem(info, type, lookups.pathMap)
             if (item != null && item.id !in dismissedIds) item else null
         }
     }
 
     // Direct observation of persistent Room upload_queue
-    private val queueItemsFlow: Flow<List<UploadUiItem>> = DbHolder.database.uploadQueueDao().getAllFlow().map { queueList ->
+    private val queueItemsFlow: Flow<List<UploadUiItem>> = DbHolder.database.uploadQueueDao().getAllFlow()
+        .onStart { emit(emptyList()) }
+        .map { queueList ->
         val isAutoBackupEnabled = Preferences.getBoolean(Preferences.isAutoBackupEnabledKey, true)
         queueList.map { queue ->
             val status = when (queue.status) {
@@ -267,6 +353,7 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
                 else -> queue.status
             }
             val fileName = queue.pathUri.substringAfterLast("/")
+            val isVideo = queue.mediaType == "VIDEO"
             UploadUiItem(
                 id = queue.id.toString(),
                 type = when (queue.workerType) {
@@ -282,7 +369,11 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
                 localPhotoId = queue.pathUri,
                 localId = queue.localId,
                 isCancellable = status == UploadStatus.InProgress || status == UploadStatus.Queued,
-                timestamp = queue.createdAt
+                timestamp = queue.createdAt,
+                isVideo = isVideo,
+                duration = queue.duration,
+                width = queue.width,
+                height = queue.height
             )
         }
     }
@@ -292,12 +383,29 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
         val resolvedWork = workItems.map { item ->
             if (item.id in retryingIds) item.copy(status = UploadStatus.Queued, progressText = "Retrying...") else item
         }.map { item ->
-            if (item.thumbnailUri == null && item.localPhotoId == null && item.fileName != null) {
-                val matchingPath = nonUploadedPhotos.firstOrNull { p ->
-                    p.pathUri.contains(item.fileName, ignoreCase = true)
-                }?.pathUri
-                if (matchingPath != null) item.copy(thumbnailUri = matchingPath, localPhotoId = matchingPath) else item
-            } else item
+            val matchedPhoto = nonUploadedPhotos.firstOrNull { p ->
+                (item.fileName != null && p.pathUri.contains(item.fileName, ignoreCase = true)) ||
+                (item.localId != null && p.localId == item.localId)
+            }
+            var updated = item
+            if (updated.thumbnailUri == null && updated.localPhotoId == null && matchedPhoto != null) {
+                updated = updated.copy(thumbnailUri = matchedPhoto.pathUri, localPhotoId = matchedPhoto.pathUri)
+            }
+            if (!updated.isVideo && matchedPhoto != null && matchedPhoto.mediaType == "VIDEO") {
+                updated = updated.copy(
+                    isVideo = true,
+                    duration = updated.duration ?: matchedPhoto.duration,
+                    width = updated.width ?: matchedPhoto.width,
+                    height = updated.height ?: matchedPhoto.height
+                )
+            } else if (matchedPhoto != null && (updated.duration == null || updated.width == null)) {
+                updated = updated.copy(
+                    duration = updated.duration ?: matchedPhoto.duration,
+                    width = updated.width ?: matchedPhoto.width,
+                    height = updated.height ?: matchedPhoto.height
+                )
+            }
+            updated
         }
         val queueLocalIds = queueItems.mapNotNull { it.localId }.toSet()
         queueItems + resolvedWork.filter { it.localId !in queueLocalIds }
@@ -307,13 +415,12 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
     val allUploads: StateFlow<List<UploadUiItem>> = combine(
         allWorkFlow, 
         remotePhotosFlow,
-        remoteToLocalPathMapFlow,
-        remoteToLocalIdMapFlow,
+        localPhotoLookupsFlow,
         _dismissedIds
-    ) { workItems, dbItems, localMap, localIdMap, dismissed ->
+    ) { workItems, dbItems, lookups, dismissed ->
         val dbUploads = dbItems
             .filter { it.remoteId !in dismissed }
-            .map { mapRemotePhotoToUiItem(it, localMap, localIdMap) }
+            .map { mapRemotePhotoToUiItem(it, lookups.pathMap, lookups.idMap, lookups.photosByLocalId) }
         val dbFileNames = dbItems.mapNotNull { it.fileName }.toSet()
 
         // Deduplicate: Keep work items only if they are not yet in the DB
@@ -333,21 +440,20 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
                 .thenByDescending { it.status == UploadStatus.Failed }
                 .thenByDescending { it.timestamp }
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
  
     // Manual uploads only (manual backup + instant uploads + DB history of these types)
     val manualUploads: StateFlow<List<UploadUiItem>> = combine(
         allWorkFlow, 
         remotePhotosFlow,
-        remoteToLocalPathMapFlow,
-        remoteToLocalIdMapFlow,
+        localPhotoLookupsFlow,
         _dismissedIds
-    ) { workItems, dbItems, localMap, localIdMap, dismissed ->
+    ) { workItems, dbItems, lookups, dismissed ->
         val manualWork = workItems.filter { it.type == UploadType.Selective || it.type == UploadType.Instant }
         val manualDb = dbItems
             .filter { it.uploadType == "manual_backup" || it.uploadType == "instant" }
             .filter { it.remoteId !in dismissed }
-            .map { mapRemotePhotoToUiItem(it, localMap, localIdMap) }
+            .map { mapRemotePhotoToUiItem(it, lookups.pathMap, lookups.idMap, lookups.photosByLocalId) }
         
         val dbFileNames = manualDb.mapNotNull { it.fileName }.toSet()
         val filteredWork = manualWork.filter { 
@@ -359,29 +465,28 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
                 .thenByDescending { it.timestamp }
         )
         result
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
  
     // Auto backup uploads only (Active work)
     val autoBackupUploads: StateFlow<List<UploadUiItem>> = allWorkFlow.map { items ->
-        items.filter { it.type == UploadType.Background }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        items.filter { it.type == UploadType.Background && it.status != UploadStatus.Completed }
+    }.stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
  
     // Failed uploads only
     val failedUploads: StateFlow<List<UploadUiItem>> = allWorkFlow.map { items ->
         items.filter { it.status == UploadStatus.Failed }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
  
     // Synced/Completed uploads history (All DB records + recently synced)
     val syncedUploads: StateFlow<List<UploadUiItem>> = combine(
         allWorkFlow,
         remotePhotosFlow,
-        remoteToLocalPathMapFlow,
-        remoteToLocalIdMapFlow,
+        localPhotoLookupsFlow,
         _dismissedIds
-    ) { workItems, dbItems, localMap, localIdMap, dismissed ->
+    ) { workItems, dbItems, lookups, dismissed ->
         val dbUploads = dbItems
             .filter { it.remoteId !in dismissed }
-            .map { mapRemotePhotoToUiItem(it, localMap, localIdMap) }
+            .map { mapRemotePhotoToUiItem(it, lookups.pathMap, lookups.idMap, lookups.photosByLocalId) }
         val dbFileNames = dbItems.mapNotNull { it.fileName }.toSet()
         
         // Include work items that are completed but not yet in DB
@@ -390,17 +495,31 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
         }
         
         (recentlyCompletedWork + dbUploads).sortedByDescending { it.timestamp }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
  
-    private fun mapRemotePhotoToUiItem(
+    fun mapRemotePhotoToUiItem(
         remote: com.gallerysync.app.data.localdb.entities.RemotePhoto,
         localPathMap: Map<String, String>,
-        localIdMap: Map<String, String> = emptyMap()
+        localIdMap: Map<String, String> = emptyMap(),
+        localPhotoMap: Map<String, Photo> = emptyMap()
     ): UploadUiItem {
         val localPath = localPathMap[remote.remoteId]
-        val matchedLocalId = localIdMap[remote.remoteId]
+        val matchedLocalId = localIdMap[remote.remoteId] ?: remote.localId
+        val matchedPhoto = (if (matchedLocalId != null) localPhotoMap[matchedLocalId] else null)
+            ?: (if (remote.remoteId.isNotEmpty()) localPhotoMap[remote.remoteId] else null)
+
+        val isVideo = remote.mediaType == "VIDEO" || matchedPhoto?.mediaType == "VIDEO"
+        val duration = remote.duration ?: matchedPhoto?.duration
+        val width = remote.width ?: matchedPhoto?.width
+        val height = remote.height ?: matchedPhoto?.height
+
         val remoteThumb = if (localPath == null) {
-            com.gallerysync.app.utils.coil.FileIdData(remote.previewRemoteId ?: remote.remoteId)
+            if (isVideo) {
+                // Videos must only use previewRemoteId; never fall back to raw video fileId
+                remote.previewRemoteId?.let { com.gallerysync.app.utils.coil.FileIdData(it) }
+            } else {
+                com.gallerysync.app.utils.coil.FileIdData(remote.previewRemoteId ?: remote.remoteId)
+            }
         } else null
         return UploadUiItem(
             id = remote.remoteId,
@@ -414,11 +533,15 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
             progressText = "Synced to Cloud",
             thumbnailUri = localPath ?: remoteThumb,
             totalItems = 1,
-            fileName = remote.fileName ?: "Uploaded Photo",
+            fileName = remote.fileName ?: if (isVideo) "Uploaded Video" else "Uploaded Photo",
             isCancellable = false,
             localPhotoId = localPath,
             localId = matchedLocalId,
-            timestamp = remote.uploadedAt
+            timestamp = remote.uploadedAt,
+            isVideo = isVideo,
+            duration = duration,
+            width = width,
+            height = height
         )
     }
 
@@ -549,13 +672,13 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
     }
 
     fun cancelUpload(id: String) {
-        viewModelScope.launch {
+        scope.launch {
             val queueId = id.toLongOrNull()
             if (queueId != null) {
                 UploadQueueRepository.cancelQueueItem(queueId)
             }
             try {
-                workManager.cancelWorkById(UUID.fromString(id))
+                workManager?.cancelWorkById(UUID.fromString(id))
             } catch (e: Exception) {
                 Log.e("ManageUploadsVM", "Error canceling work", e)
             }
@@ -563,7 +686,7 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
     }
 
     fun deleteHistoryItem(id: String, onUndoAvailable: (String) -> Unit) {
-        viewModelScope.launch {
+        scope.launch {
             Log.d("ManageUploadsVM", "Deleting history item: $id")
             // Temporarily store it for undo
             recentlyDeletedItem = DbHolder.database.remotePhotoDao().getById(id)
@@ -580,7 +703,7 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
     }
 
     fun undoDelete() {
-        viewModelScope.launch {
+        scope.launch {
             recentlyDeletedItem?.let { item ->
                 Log.d("ManageUploadsVM", "Restoring history item: ${item.remoteId}")
                 DbHolder.database.remotePhotoDao().insertAll(item)
@@ -597,7 +720,7 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
     }
 
     fun retryAllFailed() {
-        viewModelScope.launch {
+        scope.launch {
             val count = UploadQueueRepository.retryAllEligible()
             if (count > 0) {
                 WorkModule.PeriodicBackup.enqueue()
@@ -606,7 +729,7 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
     }
 
     fun retryUpload(id: String) {
-        viewModelScope.launch {
+        scope.launch {
             val queueId = id.toLongOrNull()
             if (queueId != null) {
                 val item = DbHolder.database.uploadQueueDao().getById(queueId)
@@ -650,7 +773,7 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
     }
 
     fun refreshWorkInfo() {
-        viewModelScope.launch {
+        scope.launch {
             _isRefreshing.value = true
             // Simulate refresh delay to show the indicator for a short moment, 
             // as WorkInfo streams are continuous.
@@ -661,7 +784,7 @@ class ManageUploadsViewModel(application: Application) : AndroidViewModel(applic
 
     // Second init block — runs after all property initializers (including rawWorkFlow)
     init {
-        viewModelScope.launch {
+        scope.launch {
             rawWorkFlow.collect { workItems ->
                 val currentRetrying = _retryingIds.value
                 if (currentRetrying.isEmpty()) return@collect

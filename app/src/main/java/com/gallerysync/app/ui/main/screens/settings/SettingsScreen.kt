@@ -1348,20 +1348,25 @@ private fun ManageExcludedFoldersDialog(
 }
 
 /**
- * Queries MediaStore for all distinct album buckets on the device.
+ * Queries MediaStore for all distinct album buckets on the device (both images and videos).
  */
 private fun loadAlbumsFromMediaStore(context: Context): List<AlbumInfo> {
     val contentResolver = context.contentResolver
-    val uri = android.provider.MediaStore.Images.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL)
+    val uri = android.provider.MediaStore.Files.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL)
     val projection = arrayOf(
-        android.provider.MediaStore.Images.ImageColumns.BUCKET_ID,
-        android.provider.MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME
+        android.provider.MediaStore.MediaColumns.BUCKET_ID,
+        android.provider.MediaStore.MediaColumns.BUCKET_DISPLAY_NAME
     )
-    val sortOrder = "${android.provider.MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME} ASC"
+    val selection = "(${android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE} = ? OR ${android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE} = ?)"
+    val selectionArgs = arrayOf(
+        android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(),
+        android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString()
+    )
+    val sortOrder = "${android.provider.MediaStore.MediaColumns.BUCKET_DISPLAY_NAME} ASC"
     val albums = mutableListOf<AlbumInfo>()
-    contentResolver.query(uri, projection, null, null, sortOrder)?.use { cursor ->
-        val bucketIdIdx = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Images.ImageColumns.BUCKET_ID)
-        val bucketNameIdx = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Images.ImageColumns.BUCKET_DISPLAY_NAME)
+    contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)?.use { cursor ->
+        val bucketIdIdx = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.BUCKET_ID)
+        val bucketNameIdx = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
         val seenIds = mutableSetOf<Long>()
         while (cursor.moveToNext()) {
             val id = cursor.getLong(bucketIdIdx)

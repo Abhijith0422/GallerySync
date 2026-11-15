@@ -1,12 +1,14 @@
-﻿package com.gallerysync.app.ui.components
+package com.gallerysync.app.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,10 +16,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Error
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
@@ -29,6 +34,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -56,6 +62,10 @@ import androidx.compose.animation.*
 import com.gallerysync.app.R
 import com.gallerysync.app.data.localdb.DbHolder
 import com.gallerysync.app.data.localdb.entities.Photo
+import com.gallerysync.app.player.LocalMediaUriValidator
+import com.gallerysync.app.player.Media3VideoPlayer
+import com.gallerysync.app.player.VideoPlaybackCoordinator
+import com.gallerysync.app.player.VideoPlayerView
 import com.gallerysync.app.ui.main.screens.local.UploadState
 import com.gallerysync.app.ui.main.screens.remote.DownloadState
 import com.gallerysync.app.utils.coil.ImageLoaderModule
@@ -79,7 +89,8 @@ fun PhotoView(
     showUiState: () -> MutableState<Boolean>,
     window: Window,
     sharedTransitionScope: SharedTransitionScope,
-    animatedVisibilityScope: AnimatedVisibilityScope
+    animatedVisibilityScope: AnimatedVisibilityScope,
+    isCurrentPage: Boolean = true
 ) {
     val context = LocalContext.current
     var showUi by showUiState()
@@ -102,6 +113,58 @@ fun PhotoView(
     // Dialog state for download confirmation when photo exists
     var showDownloadDialog by rememberSaveable { mutableStateOf(false) }
     var existingPhotoPath by rememberSaveable { mutableStateOf("") }
+
+    // Media type and local URI resolution for video playback
+    val isVideo = photo.mediaType.equals("VIDEO", ignoreCase = true)
+    val directUri = remember(photo.pathUri) {
+        if (LocalMediaUriValidator.isLocalMediaUri(photo.pathUri)) photo.pathUri else null
+    }
+    var localPlaybackUriString by remember(photo.localId, photo.remoteId, photo.pathUri) {
+        mutableStateOf(directUri)
+    }
+
+    androidx.compose.runtime.LaunchedEffect(photo.remoteId) {
+        if (localPlaybackUriString == null && photo.remoteId != null) {
+            val localMatch = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                DbHolder.database.photoDao().getByRemoteId(photo.remoteId)
+            }
+            if (localMatch != null && LocalMediaUriValidator.isLocalMediaUri(localMatch.pathUri)) {
+                localPlaybackUriString = localMatch.pathUri
+            }
+        }
+    }
+
+    val playerKey = remember(photo.localId, photo.remoteId, photo.pathUri) {
+        photo.localId.takeIf { it.isNotBlank() } ?: (photo.remoteId ?: photo.pathUri)
+    }
+
+    val coordinator = remember(playerKey, localPlaybackUriString) {
+        if (isVideo && localPlaybackUriString != null) {
+            VideoPlaybackCoordinator {
+                Media3VideoPlayer(context.applicationContext, localPlaybackUriString!!.toUri())
+            }
+        } else {
+            null
+        }
+    }
+
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+
+    DisposableEffect(coordinator, lifecycleOwner) {
+        if (coordinator != null) {
+            lifecycleOwner.lifecycle.addObserver(coordinator)
+        }
+        onDispose {
+            if (coordinator != null) {
+                lifecycleOwner.lifecycle.removeObserver(coordinator)
+                coordinator.release()
+            }
+        }
+    }
+
+    androidx.compose.runtime.LaunchedEffect(coordinator, isCurrentPage) {
+        coordinator?.onPageSelected(isCurrentPage)
+    }
 
 
     val view = LocalView.current
@@ -186,35 +249,153 @@ fun PhotoView(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        with(sharedTransitionScope) {
-            SubcomposeAsyncImage(
-                imageLoader = if (isOnlyRemote) ImageLoaderModule.remoteImageLoader else ImageLoaderModule.defaultImageLoader,
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(if (isOnlyRemote) com.gallerysync.app.utils.coil.FileIdData(photo.remoteId!!) else photo.pathUri)
-                    .memoryCacheKey(if (isOnlyRemote) "fid_${photo.remoteId}_full" else null)
-                    .diskCacheKey(if (isOnlyRemote) "fid_${photo.remoteId}" else null)
-                    .crossfade(500)
-                    .build(),
-                contentDescription = "Photo",
-                contentScale = ContentScale.Fit,
-                loading = {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        androidx.compose.material3.ContainedLoadingIndicator()
-                    }
-                },
-                modifier = Modifier
-                    .sharedElement(
-                        rememberSharedContentState(key = if (isOnlyRemote) "photo_${photo.remoteId}" else "photo_${photo.localId}"),
-                        animatedVisibilityScope = animatedVisibilityScope,
-                        boundsTransform = { _, _ -> com.gallerysync.app.ui.theme.AnimationConstants.PremiumBoundsSpring }
-                    )
-                    .fillMaxSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = { showUi = !showUi }
+        if (isVideo) {
+            val activePlayer = coordinator?.player
+            if (localPlaybackUriString != null && activePlayer != null) {
+                VideoPlayerView(
+                    player = activePlayer,
+                    modifier = Modifier.fillMaxSize(),
+                    enableControls = true,
+                    onSurfaceClick = { showUi = !showUi }
+                )
+            } else if (localPlaybackUriString != null) {
+                // Adjacent precomposed page or initializing player: show static frame with play badge
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = { showUi = !showUi }
+                            )
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    with(sharedTransitionScope) {
+                        SubcomposeAsyncImage(
+                            imageLoader = ImageLoaderModule.defaultImageLoader,
+                            model = ImageRequest.Builder(context)
+                                .data(localPlaybackUriString)
+                                .crossfade(200)
+                                .build(),
+                            contentDescription = "Video Thumbnail",
+                            contentScale = ContentScale.Fit,
+                            loading = {
+                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    androidx.compose.material3.ContainedLoadingIndicator()
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
                         )
                     }
-            )
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.5f),
+                        shape = androidx.compose.foundation.shape.CircleShape,
+                        modifier = Modifier.size(64.dp)
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Rounded.PlayArrow,
+                                contentDescription = "Play Video",
+                                tint = Color.White,
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                    }
+                }
+            } else {
+                // Remote video without local copy: display thumbnail preview, video badge, and explanatory message
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = { showUi = !showUi }
+                            )
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    with(sharedTransitionScope) {
+                        SubcomposeAsyncImage(
+                            imageLoader = ImageLoaderModule.remoteImageLoader,
+                            model = ImageRequest.Builder(context)
+                                .data(
+                                    if (photo.previewRemoteId != null) com.gallerysync.app.utils.coil.FileIdData(photo.previewRemoteId)
+                                    else if (photo.remoteId != null) com.gallerysync.app.utils.coil.FileIdData(photo.remoteId)
+                                    else photo.pathUri
+                                )
+                                .memoryCacheKey(if (photo.remoteId != null) "fid_${photo.remoteId}_full" else null)
+                                .diskCacheKey(if (photo.remoteId != null) "fid_${photo.remoteId}" else null)
+                                .crossfade(300)
+                                .build(),
+                            contentDescription = "Cloud Video",
+                            contentScale = ContentScale.Fit,
+                            loading = {
+                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    androidx.compose.material3.ContainedLoadingIndicator()
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.75f),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .padding(horizontal = 24.dp)
+                            .padding(bottom = 90.dp)
+                            .align(Alignment.Center)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.CloudDownload,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Text(
+                                text = "Video stored in Cloud • Download to device for local playback",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            with(sharedTransitionScope) {
+                SubcomposeAsyncImage(
+                    imageLoader = if (isOnlyRemote) ImageLoaderModule.remoteImageLoader else ImageLoaderModule.defaultImageLoader,
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(if (isOnlyRemote) com.gallerysync.app.utils.coil.FileIdData(photo.remoteId!!) else photo.pathUri)
+                        .memoryCacheKey(if (isOnlyRemote) "fid_${photo.remoteId}_full" else null)
+                        .diskCacheKey(if (isOnlyRemote) "fid_${photo.remoteId}" else null)
+                        .crossfade(500)
+                        .build(),
+                    contentDescription = "Photo",
+                    contentScale = ContentScale.Fit,
+                    loading = {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            androidx.compose.material3.ContainedLoadingIndicator()
+                        }
+                    },
+                    modifier = Modifier
+                        .sharedElement(
+                            rememberSharedContentState(key = if (isOnlyRemote) "photo_${photo.remoteId}" else "photo_${photo.localId}"),
+                            animatedVisibilityScope = animatedVisibilityScope,
+                            boundsTransform = { _, _ -> com.gallerysync.app.ui.theme.AnimationConstants.PremiumBoundsSpring }
+                        )
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = { showUi = !showUi }
+                            )
+                        }
+                )
+            }
         }
 
         // Download button for cloud photos

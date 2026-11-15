@@ -1,4 +1,4 @@
-﻿package com.gallerysync.app.ui.components
+package com.gallerysync.app.ui.components
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -82,7 +82,8 @@ fun PhotoPageView(
                     showUiState = { showUiState },
                     window = window,
                     sharedTransitionScope = sharedTransitionScope,
-                    animatedVisibilityScope = animatedVisibilityScope
+                    animatedVisibilityScope = animatedVisibilityScope,
+                    isCurrentPage = pagerState.currentPage == pageIndex
                 )
             }
         }

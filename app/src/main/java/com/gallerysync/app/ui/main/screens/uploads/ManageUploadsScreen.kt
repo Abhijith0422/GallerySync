@@ -1,4 +1,4 @@
-﻿package com.gallerysync.app.ui.main.screens.uploads
+package com.gallerysync.app.ui.main.screens.uploads
 
 import android.text.format.DateUtils
 import androidx.compose.animation.AnimatedVisibility
@@ -46,10 +46,12 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Upload
 import androidx.compose.material.icons.rounded.UploadFile
+import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -1041,7 +1043,9 @@ private fun UploadItemCard(
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (thumbData != null) {
+                    var isImageLoadFailed by remember(thumbData) { mutableStateOf(false) }
+
+                    if (thumbData != null && !isImageLoadFailed) {
                         AsyncImage(
                             imageLoader = com.gallerysync.app.utils.coil.ImageLoaderModule.thumbnailImageLoader,
                             model = let {
@@ -1057,12 +1061,15 @@ private fun UploadItemCard(
                                 }
                                 builder.build()
                             },
-                            contentDescription = null,
+                            contentDescription = if (item.isVideo) "Video thumbnail" else null,
                             contentScale = ContentScale.Crop,
+                            onError = { isImageLoadFailed = true },
                             modifier = Modifier.fillMaxSize()
                         )
-                    } else {
+                    }
+                    if (thumbData == null || isImageLoadFailed) {
                         val icon = when {
+                            item.isVideo -> Icons.Rounded.Videocam
                             item.status == UploadStatus.Completed -> Icons.Rounded.CloudDone
                             item.status == UploadStatus.Failed -> Icons.Rounded.Warning
                             item.type == UploadType.Selective -> Icons.Rounded.Upload
@@ -1071,11 +1078,42 @@ private fun UploadItemCard(
                         }
                         Icon(
                             imageVector = icon,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                            modifier = Modifier.size(28.dp)
+                            contentDescription = if (item.isVideo) "Video placeholder" else null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (item.isVideo) 0.6f else 0.4f),
+                            modifier = Modifier.size(if (item.isVideo) 30.dp else 28.dp)
                         )
                     }
+
+                    // Video overlay indicator and duration
+                    if (item.isVideo) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(3.dp)
+                                .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.PlayArrow,
+                                    contentDescription = "Video",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(10.dp)
+                                )
+                                Text(
+                                    text = UploadUiItem.formatDuration(item.duration),
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
                     // Status badge overlay
                     StatusBadge(
                         status = item.status,
@@ -1144,6 +1182,33 @@ private fun UploadItemCard(
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                             )
+                        }
+
+                        // Video metadata badge
+                        if (item.isVideo) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Videocam,
+                                        contentDescription = "Video",
+                                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Text(
+                                        text = UploadUiItem.formatDuration(item.duration),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
 
                         // Item count chip (for batch uploads)
@@ -1353,19 +1418,65 @@ private fun QueuedPhotoCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Thumbnail
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(photo.pathUri)
-                    .crossfade(true)
-                    .size(256)
-                    .build(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
+            val isVideo = photo.mediaType == "VIDEO"
+            Box(
                 modifier = Modifier
                     .size(56.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            )
+                    .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                contentAlignment = Alignment.Center
+            ) {
+                var isLoadFailed by remember(photo.pathUri) { mutableStateOf(false) }
+                if (!isLoadFailed) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(photo.pathUri)
+                            .crossfade(true)
+                            .size(256)
+                            .build(),
+                        contentDescription = if (isVideo) "Video thumbnail" else null,
+                        contentScale = ContentScale.Crop,
+                        onError = { isLoadFailed = true },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                if (isLoadFailed) {
+                    Icon(
+                        imageVector = if (isVideo) Icons.Rounded.Videocam else Icons.Rounded.Image,
+                        contentDescription = if (isVideo) "Video placeholder" else null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (isVideo) 0.6f else 0.4f),
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+                if (isVideo) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(2.dp)
+                            .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(3.dp))
+                            .padding(horizontal = 3.dp, vertical = 1.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.PlayArrow,
+                                contentDescription = "Video",
+                                tint = Color.White,
+                                modifier = Modifier.size(8.dp)
+                            )
+                            Text(
+                                text = UploadUiItem.formatDuration(photo.duration),
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.width(14.dp))
 

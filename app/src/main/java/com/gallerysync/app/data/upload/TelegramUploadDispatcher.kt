@@ -235,6 +235,10 @@ object TelegramUploadDispatcher {
             val finalMediaType = if (dispatchType == UploadDispatchType.DOCUMENT_IMAGE) "IMAGE" else "VIDEO"
             val deviceId = Preferences.getOrCreateDeviceId()
 
+            // Extract thumbnail ID from video or document response, or keep existing previewId if provided
+            val extractedThumbId = extractPreviewRemoteId(message)
+            val effectivePreviewRemoteId = extractedThumbId ?: previewId
+
             saveRemotePhoto(
                 photo = photo,
                 remoteId = remoteId,
@@ -245,7 +249,7 @@ object TelegramUploadDispatcher {
                 mediaType = finalMediaType,
                 deviceId = deviceId,
                 uploadType = uploadType,
-                previewRemoteId = previewId,
+                previewRemoteId = effectivePreviewRemoteId,
                 uploadedToTopic = uploadedToTopic,
                 topicId = messageThreadId,
                 topicName = topicName
@@ -380,6 +384,16 @@ object TelegramUploadDispatcher {
         val photoSize = message.photo?.maxByOrNull { it.fileSize ?: 0 }
         val sticker = message.sticker
         return video?.fileId ?: doc?.fileId ?: photoSize?.fileId ?: sticker?.fileId
+    }
+
+    /**
+     * Extracts thumbnail fileId from a video or document message response.
+     * Returns null if no thumbnail was provided by Telegram.
+     */
+    fun extractPreviewRemoteId(message: Message): String? {
+        val videoThumb = message.video?.thumb?.fileId
+        val docThumb = message.document?.thumb?.fileId
+        return videoThumb ?: docThumb
     }
 
     private suspend fun saveRemotePhoto(
