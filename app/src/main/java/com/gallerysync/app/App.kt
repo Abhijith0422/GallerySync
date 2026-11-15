@@ -69,6 +69,11 @@ class App : Application(), androidx.work.Configuration.Provider {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                com.gallerysync.app.data.localdb.recovery.InstallRecoveryManager.checkAndInitializeBaseline(applicationContext)
+            } catch (e: Exception) {
+                android.util.Log.e("App", "Error checking baseline on startup", e)
+            }
+            try {
                 UploadQueueRepository.recoverStaleUploads()
             } catch (e: Exception) {
                 android.util.Log.e("App", "Error recovering stale uploads on startup", e)

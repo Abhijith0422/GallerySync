@@ -39,10 +39,24 @@ class SyncDbMediaStoreWorker(
                 }
             }
 
-            // 2. Stream and index media in bounded batches of 200
+            // 2. Determine initial baseline state: fresh install/reinstall vs ongoing scan
+            val isBaselineDone = com.gallerysync.app.data.localdb.recovery.InstallRecoveryManager.isBaselineCompleted(DbHolder.database)
+            val baselineTimestamp = com.gallerysync.app.data.localdb.recovery.InstallRecoveryManager.getBaselineTimestamp(DbHolder.database)
+            val scanStartTime = System.currentTimeMillis()
+
+            // 3. Stream and index media in bounded batches of 200
             var totalIndexed = 0
             val totalScanned = MediaStoreScanner.scanAllInBatches(context, batchSize = 200) { batch ->
-                val photos = batch.map { it.toPhoto() }
+                val photos = batch.map { item ->
+                    val itemTimestampMs = maxOf(item.dateAdded, item.dateModified) * 1000L
+                    // Items existing at or before baseline are held; genuinely new items after baseline are marked NONE
+                    val status = if (!isBaselineDone || (baselineTimestamp > 0L && itemTimestampMs <= baselineTimestamp)) {
+                        com.gallerysync.app.data.localdb.entities.Photo.STATUS_HOLDING
+                    } else {
+                        com.gallerysync.app.data.localdb.entities.Photo.STATUS_NONE
+                    }
+                    item.toPhoto(defaultUploadStatus = status)
+                }
                 val insertedRowIds = photoDao.insertPhotos(*photos.toTypedArray())
                 val newInserts = insertedRowIds.count { it != -1L }
                 totalIndexed += newInserts
@@ -61,9 +75,19 @@ class SyncDbMediaStoreWorker(
                 }
             }
 
-            Log.i(TAG, "MediaStore scan finished: scanned=$totalScanned, newly indexed=$totalIndexed")
+            // If this was the initial baseline scan, mark baseline completed now
+            if (!isBaselineDone) {
+                com.gallerysync.app.data.localdb.recovery.InstallRecoveryManager.markBaselineCompleted(
+                    database = DbHolder.database,
+                    mediaCount = totalScanned,
+                    timestamp = scanStartTime
+                )
+                Log.i(TAG, "Completed initial baseline MediaStore scan: $totalScanned items placed in HOLDING state (baselineTimestamp=$scanStartTime).")
+            }
 
-            // 3. Safe deletion check (strictly guarded: only runs if FullAccess is granted)
+            Log.i(TAG, "MediaStore scan finished: scanned=$totalScanned, newly indexed=$totalIndexed (baselineDone=$isBaselineDone)")
+
+            // 4. Safe deletion check (strictly guarded: only runs if FullAccess is granted)
             MediaStoreScanner.pruneDeletedMedia(context, photoDao)
 
             Result.success()

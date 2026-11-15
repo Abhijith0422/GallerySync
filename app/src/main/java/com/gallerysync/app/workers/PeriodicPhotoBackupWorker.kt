@@ -170,9 +170,7 @@ class PeriodicPhotoBackupWorker(
                 }
             }
         } finally {
-            if (isStopped) {
-                UploadQueueRepository.releaseWorkerClaims(workerToken)
-            }
+            UploadQueueRepository.releaseWorkerClaims(workerToken)
         }
     }
 
@@ -280,7 +278,78 @@ class PeriodicPhotoBackupWorker(
                 }
             }
 
-            // 6. Perform upload via TelegramUploadDispatcher
+            // 6. Check if media requires chunked upload (e.g. video > 50 MB or active chunked backup)
+            val rawSourceSize = TelegramUploadDispatcher.getSourceFileSize(appContext, uri)
+            val isChunkedVideo = queueItem.mediaType == "VIDEO" && (
+                rawSourceSize > TelegramUploadDispatcher.MAX_TELEGRAM_FILE_SIZE_BYTES ||
+                com.gallerysync.app.data.upload.ChunkedBackupRepository.getBackupByLocalId(queueItem.localId) != null
+            )
+
+            if (isChunkedVideo) {
+                val isManual = uploadType == "manual_backup"
+                Log.i("PeriodicBackup", "Large video detected ($rawSourceSize bytes, localId=${queueItem.localId}). Routing to ChunkedUploadEngine.")
+                val chunkResult = com.gallerysync.app.data.upload.ChunkedUploadEngine.defaultInstance.processBackup(
+                    context = appContext,
+                    photo = current.copy(contentHash = hash),
+                    isManual = isManual,
+                    isStopped = { isStopped }
+                )
+                return@coroutineScope when (chunkResult) {
+                    is com.gallerysync.app.data.upload.ChunkedUploadResult.Success -> {
+                        if (chunkResult.isAllChunksUploaded) {
+                            Log.i("PeriodicBackup", "All ${chunkResult.totalChunks} chunks uploaded for ${chunkResult.backupId}. Awaiting Phase 10.4 manifest.")
+                            UploadQueueRepository.recordSuccess(
+                                queueId = queueItem.id,
+                                localId = queueItem.localId,
+                                remoteId = "CHUNKED_${chunkResult.backupId}"
+                            )
+                            true
+                        } else {
+                            Log.i("PeriodicBackup", "Chunked upload made progress (${chunkResult.completedChunks}/${chunkResult.totalChunks}) but not finished. Releasing claim and scheduling continuation.")
+                            DbHolder.database.uploadQueueDao().resetStaleItem(queueItem.id)
+                            WorkModule.PeriodicBackup.enqueue(type = uploadType)
+                            false
+                        }
+                    }
+                    is com.gallerysync.app.data.upload.ChunkedUploadResult.Yielded -> {
+                        Log.i("PeriodicBackup", "Chunked upload yielded at boundary (${chunkResult.completedChunks}/${chunkResult.totalChunks} chunks): ${chunkResult.reason}. Releasing claim and scheduling continuation.")
+                        DbHolder.database.uploadQueueDao().resetStaleItem(queueItem.id)
+                        WorkModule.PeriodicBackup.enqueue(type = uploadType)
+                        false
+                    }
+                    is com.gallerysync.app.data.upload.ChunkedUploadResult.RateLimited -> {
+                        val waitSec = chunkResult.retryAfterSeconds
+                        val err = TelegramUploadDispatcher.UploadError.RateLimited(waitSec)
+                        UploadQueueRepository.recordFailure(queueItem.id, queueItem.localId, err)
+                        false
+                    }
+                    is com.gallerysync.app.data.upload.ChunkedUploadResult.TransientError -> {
+                        val err = TelegramUploadDispatcher.UploadError.ApiError(0, chunkResult.message, isRetryable = true)
+                        UploadQueueRepository.recordFailure(queueItem.id, queueItem.localId, err)
+                        false
+                    }
+                    is com.gallerysync.app.data.upload.ChunkedUploadResult.PermanentError,
+                    is com.gallerysync.app.data.upload.ChunkedUploadResult.ConfigurationMismatch,
+                    is com.gallerysync.app.data.upload.ChunkedUploadResult.SourceModified -> {
+                        val msg = when (chunkResult) {
+                            is com.gallerysync.app.data.upload.ChunkedUploadResult.ConfigurationMismatch -> chunkResult.reason
+                            is com.gallerysync.app.data.upload.ChunkedUploadResult.SourceModified -> chunkResult.reason
+                            is com.gallerysync.app.data.upload.ChunkedUploadResult.PermanentError -> chunkResult.message
+                            else -> "Chunked upload failed"
+                        }
+                        val err = TelegramUploadDispatcher.UploadError.ApiError(0, msg, isRetryable = false)
+                        UploadQueueRepository.recordFailure(queueItem.id, queueItem.localId, err)
+                        false
+                    }
+                    is com.gallerysync.app.data.upload.ChunkedUploadResult.Cancelled,
+                    is com.gallerysync.app.data.upload.ChunkedUploadResult.NetworkUnavailable -> {
+                        DbHolder.database.uploadQueueDao().resetStaleItem(queueItem.id)
+                        false
+                    }
+                }
+            }
+
+            // 7. Perform standard upload via TelegramUploadDispatcher
             val uploadResult = TelegramUploadDispatcher.uploadMedia(
                 context = appContext,
                 photo = current.copy(contentHash = hash),

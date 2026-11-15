@@ -155,6 +155,20 @@ object Preferences {
     const val SYNC_MODE_ALL: String = "all"
     const val SYNC_MODE_NEW_ONLY: String = "newOnly"
 
+    // Initial-install baseline & reinstall recovery keys (Phase 10.3.2)
+    const val initialBaselineCompletedKey: String = "initial_baseline_completed"
+    const val initialBaselineTimestampKey: String = "initial_baseline_timestamp"
+    const val initialBaselineMediaCountKey: String = "initial_baseline_media_count"
+
+    fun isInitialBaselineCompleted(): Boolean = getBoolean(initialBaselineCompletedKey, false)
+    fun setInitialBaselineCompleted(completed: Boolean) = edit { putBoolean(initialBaselineCompletedKey, completed) }
+
+    fun getInitialBaselineTimestamp(): Long = getLong(initialBaselineTimestampKey, 0L)
+    fun setInitialBaselineTimestamp(timestamp: Long) = edit { putLong(initialBaselineTimestampKey, timestamp) }
+
+    fun getInitialBaselineMediaCount(): Long = getLong(initialBaselineMediaCountKey, 0L)
+    fun setInitialBaselineMediaCount(count: Long) = edit { putLong(initialBaselineMediaCountKey, count) }
+
     // Network policy preferences (Phase 7)
     const val isWifiOnlyBackupEnabledKey: String = "isWifiOnlyBackupEnabled"
     const val allowMeteredWifiBackupKey: String = "allowMeteredWifiBackup"

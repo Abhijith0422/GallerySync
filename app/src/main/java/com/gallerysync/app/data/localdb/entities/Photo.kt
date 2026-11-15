@@ -1,4 +1,4 @@
-﻿package com.gallerysync.app.data.localdb.entities
+package com.gallerysync.app.data.localdb.entities
 
 import android.os.Parcelable
 import androidx.annotation.Keep
@@ -27,7 +27,7 @@ data class Photo(
     @ColumnInfo val photoType: String,
     @ColumnInfo val pathUri: String,
     @ColumnInfo val contentHash: String? = null,
-    @ColumnInfo val uploadStatus: String = "NONE",
+    @ColumnInfo val uploadStatus: String = STATUS_NONE,
     @ColumnInfo val deviceId: String? = null,
     @ColumnInfo val lastUploadAttempt: Long? = null,
     @ColumnInfo val uploadRetryCount: Int = 0,
@@ -38,7 +38,19 @@ data class Photo(
     @ColumnInfo val duration: Long? = null
 ) : Parcelable {
 
+    val isHolding: Boolean get() = uploadStatus == STATUS_HOLDING
+    val isUploaded: Boolean get() = remoteId != null || uploadStatus == STATUS_DONE
+    val isPending: Boolean get() = uploadStatus in listOf(STATUS_NONE, STATUS_FAILED) && remoteId == null
+
     companion object {
+        const val STATUS_NONE = "NONE"
+        const val STATUS_HOLDING = "HOLDING"
+        const val STATUS_UPLOADING = "UPLOADING"
+        const val STATUS_DONE = "DONE"
+        const val STATUS_FAILED = "FAILED"
+        const val STATUS_EXCEEDS_LIMIT = "EXCEEDS_LIMIT"
+        const val STATUS_SOURCE_MISSING = "SOURCE_MISSING"
+
         @JvmStatic
         @JsonCreator
         fun create(
@@ -47,7 +59,7 @@ data class Photo(
             @JsonProperty("photoType") photoType: String,
             @JsonProperty("pathUri") pathUri: String,
             @JsonProperty("contentHash") contentHash: String? = null,
-            @JsonProperty("uploadStatus") uploadStatus: String = "NONE",
+            @JsonProperty("uploadStatus") uploadStatus: String = STATUS_NONE,
             @JsonProperty("deviceId") deviceId: String? = null,
             @JsonProperty("lastUploadAttempt") lastUploadAttempt: Long? = null,
             @JsonProperty("uploadRetryCount") uploadRetryCount: Int = 0,

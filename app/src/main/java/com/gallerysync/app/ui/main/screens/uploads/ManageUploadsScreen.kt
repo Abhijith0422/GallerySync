@@ -141,6 +141,7 @@ fun ManageUploadsScreen(
     val failedUploads by viewModel.failedUploads.collectAsStateWithLifecycle()
     val syncedUploads by viewModel.syncedUploads.collectAsStateWithLifecycle()
     val queuedPhotos by viewModel.queuedPhotos.collectAsStateWithLifecycle()
+    val holdingPhotos by viewModel.holdingPhotos.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedIds.collectAsStateWithLifecycle()
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
@@ -498,6 +499,7 @@ fun ManageUploadsScreen(
                         UploadTab.All -> UploadListContent(
                             uploads = allUploads.filter { it.status != UploadStatus.Cancelled },
                             queuedPhotos = queuedPhotos,
+                            holdingPhotos = holdingPhotos,
                             showQueued = true,
                             onCancel = { viewModel.cancelUpload(it) },
                             onRetry = { id -> viewModel.retryUpload(id) },
@@ -529,6 +531,7 @@ fun ManageUploadsScreen(
                         UploadTab.AutoBackup -> UploadListContent(
                             uploads = autoBackupUploads,
                             queuedPhotos = queuedPhotos,
+                            holdingPhotos = holdingPhotos,
                             showQueued = true,
                             onCancel = { viewModel.cancelUpload(it) },
                             onRetry = { id -> viewModel.retryUpload(id) },
@@ -640,6 +643,7 @@ private fun StatPill(
 private fun UploadListContent(
     uploads: List<UploadUiItem>,
     queuedPhotos: List<Photo>,
+    holdingPhotos: List<Photo> = emptyList(),
     showQueued: Boolean,
     onCancel: (String) -> Unit,
     onRetry: (String) -> Unit,
@@ -660,7 +664,7 @@ private fun UploadListContent(
         setLocalUploads(uploads)
     }
 
-    val isEmpty = localUploads.isEmpty() && (!showQueued || queuedPhotos.isEmpty())
+    val isEmpty = localUploads.isEmpty() && (!showQueued || (queuedPhotos.isEmpty() && holdingPhotos.isEmpty()))
     val scope = rememberCoroutineScope()
     
     // Refreshing state tied to ViewModel
@@ -929,6 +933,54 @@ private fun UploadListContent(
                     )
                 }
                 items(queuedPhotos, key = { "queued_${it.localId}" }) { photo ->
+                    QueuedPhotoCard(
+                        photo = photo,
+                        onTap = {
+                            try {
+                                navController.navigate("photo_viewer/${photo.localId}/false")
+                            } catch (_: Exception) {}
+                        },
+                        modifier = Modifier.animateItem()
+                    )
+                }
+            }
+
+            // Unverified / Holding media (Phase 10.3.2 Reinstall Protection)
+            if (showQueued && holdingPhotos.isNotEmpty()) {
+                item(key = "header_holding") {
+                    SectionHeader(
+                        title = "Unverified Media (${holdingPhotos.size})",
+                        icon = Icons.Rounded.Schedule
+                    )
+                }
+                item(key = "holding_banner") {
+                    androidx.compose.material3.Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = "Detected from initial install / reinstall. Automatically held to prevent accidental bulk re-uploading.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            androidx.compose.material3.Button(
+                                onClick = { viewModel?.uploadAllHolding() },
+                                modifier = Modifier.align(Alignment.End),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Rounded.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Upload All (${holdingPhotos.size})", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+                }
+                items(holdingPhotos, key = { "holding_${it.localId}" }) { photo ->
                     QueuedPhotoCard(
                         photo = photo,
                         onTap = {

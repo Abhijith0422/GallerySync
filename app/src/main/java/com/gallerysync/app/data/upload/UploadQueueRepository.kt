@@ -68,6 +68,14 @@ object UploadQueueRepository {
                     continue
                 }
 
+                // 1b. Holding protection guard: if an item is in HOLDING, do NOT automatically enqueue it
+                // unless this is an explicit manual backup action.
+                val isExplicitAction = workerType == "manual_backup" || workerType == "instant" || workerType == "manual"
+                if (photo.uploadStatus == Photo.STATUS_HOLDING && !isExplicitAction) {
+                    Log.d(TAG, "Skipping holding item ${photo.localId} from automatic enqueue")
+                    continue
+                }
+
                 // 2. Hash-based cloud deduplication check
                 val hash = photo.contentHash ?: run {
                     try {

@@ -103,6 +103,27 @@ object BotApi {
         create()
     }
 
+    suspend fun sendChunkDocument(
+        botToken: String = Preferences.getEncryptedString(Preferences.botToken, ""),
+        channelId: Long,
+        chunkRequestBody: okhttp3.RequestBody,
+        fileName: String,
+        expectedSize: Long,
+        messageThreadId: Long? = null,
+        caption: String? = null
+    ): TelegramChunkUploadResult {
+        val chunkApi = TelegramChunkApi(httpClient)
+        return chunkApi.sendChunkDocument(
+            botToken = botToken,
+            channelId = channelId,
+            chunkRequestBody = chunkRequestBody,
+            fileName = fileName,
+            expectedSize = expectedSize,
+            messageThreadId = messageThreadId,
+            caption = caption
+        )
+    }
+
     suspend fun getChat(chatId: ChatId): Boolean {
         return withContext(Dispatchers.IO) {
             try {

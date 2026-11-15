@@ -61,14 +61,17 @@ class Migration11to12Test {
             v11Db.close()
         }
 
-        // Step 2: Open with Room using Migration11to12_UploadQueueUnique
+        // Step 2: Open with Room using Migration11to12_UploadQueueUnique and Migration12to13_ChunkedBackup
         val roomDb = Room.databaseBuilder(context, WhDatabase::class.java, dbName)
-            .addMigrations(Migration11to12_UploadQueueUnique())
+            .addMigrations(
+                Migration11to12_UploadQueueUnique(),
+                com.gallerysync.app.data.localdb.migration.Migration12to13_ChunkedBackup()
+            )
             .build()
 
         try {
             val writableDb = roomDb.openHelper.writableDatabase
-            assertEquals(12, writableDb.version)
+            assertEquals(13, writableDb.version)
 
             val uploadQueueDao = roomDb.uploadQueueDao()
             val photoDao = roomDb.photoDao()

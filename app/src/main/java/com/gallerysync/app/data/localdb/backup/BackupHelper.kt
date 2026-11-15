@@ -1,4 +1,4 @@
-﻿package com.gallerysync.app.data.localdb.backup
+package com.gallerysync.app.data.localdb.backup
 
 import android.content.Context
 import android.net.Uri
@@ -34,15 +34,40 @@ object BackupHelper {
         try {
             val deviceId = Preferences.getOrCreateDeviceId()
             val deviceName = Preferences.getDeviceName()
+            val channelId = Preferences.getEncryptedChannelId()
+            val botUsername = Preferences.getBotUsername()
             val photos = DbHolder.database.photoDao().getAll()
             val remotePhotos = DbHolder.database.remotePhotoDao().getAllIncludingDeleted()
+
+            val mediaRecords = remotePhotos.map { remote ->
+                val linkedLocal = photos.find { it.remoteId == remote.remoteId || (remote.contentHash != null && it.contentHash == remote.contentHash) }
+                ExportedMediaRecord(
+                    originalMediaId = remote.localId ?: linkedLocal?.localId ?: remote.remoteId,
+                    originalUri = linkedLocal?.pathUri,
+                    displayName = remote.fileName,
+                    fileSize = remote.fileSize,
+                    mediaType = remote.mediaType,
+                    modificationTimestamp = linkedLocal?.lastUploadAttempt,
+                    contentSha256 = remote.contentHash ?: linkedLocal?.contentHash,
+                    telegramFileId = remote.remoteId,
+                    telegramMessageId = remote.messageId,
+                    destinationChannelId = channelId.takeIf { it != 0L },
+                    botIdentityId = botUsername.takeIf { it.isNotBlank() },
+                    backupCompletionState = remote.status,
+                    backupTimestamp = remote.uploadedAt
+                )
+            }
+
             val backupFile = BackupFile(
-                version = 2,
+                version = 3,
                 deviceId = deviceId,
                 deviceName = deviceName,
                 createdAt = System.currentTimeMillis(),
+                channelId = channelId.takeIf { it != 0L },
+                botUsername = botUsername.takeIf { it.isNotBlank() },
                 photos = photos,
-                remotePhotos = remotePhotos
+                remotePhotos = remotePhotos,
+                mediaRecords = mediaRecords
             )
             
             // Handle both specific file URIs and directory (tree) URIs
@@ -84,6 +109,16 @@ object BackupHelper {
                 val currentDeviceId = Preferences.getOrCreateDeviceId()
                 val isSameDevice = backupFile.deviceId.isEmpty() || backupFile.deviceId == currentDeviceId
 
+                // Destination identity validation (Section 3 & 6)
+                val configuredChannel = Preferences.getEncryptedChannelId()
+                if (backupFile.channelId != null && configuredChannel != 0L && backupFile.channelId != configuredChannel) {
+                    Log.w(TAG, "Destination identity warning: Backup destination channel (${backupFile.channelId}) differs from active channel ($configuredChannel). Media remains valid.")
+                }
+                val configuredBot = Preferences.getBotUsername()
+                if (!backupFile.botUsername.isNullOrBlank() && configuredBot.isNotBlank() && backupFile.botUsername != configuredBot) {
+                    Log.w(TAG, "Destination identity warning: Backup bot (${backupFile.botUsername}) differs from active bot ($configuredBot).")
+                }
+
                 if (isSameDevice) {
                     // Same device — full import
                     Log.i(TAG, "Importing from same device (${backupFile.deviceId}): full import")
@@ -98,6 +133,32 @@ object BackupHelper {
                         *backupFile.remotePhotos.toTypedArray()
                     )
                 }
+
+                // If mediaRecords are present, ensure any missing records are merged into remote_photos
+                if (backupFile.mediaRecords.isNotEmpty()) {
+                    val existingRemoteIds = DbHolder.database.remotePhotoDao().getAllRemoteIds().toSet()
+                    val additionalRemotePhotos = backupFile.mediaRecords.filter { it.telegramFileId != null && it.telegramFileId !in existingRemoteIds }.map { rec ->
+                        com.gallerysync.app.data.localdb.entities.RemotePhoto(
+                            remoteId = rec.telegramFileId!!,
+                            photoType = rec.displayName?.substringAfterLast('.', "")?.ifEmpty { if (rec.mediaType == "VIDEO") "mp4" else "jpg" } ?: "jpg",
+                            fileName = rec.displayName,
+                            fileSize = rec.fileSize,
+                            uploadedAt = rec.backupTimestamp,
+                            messageId = rec.telegramMessageId,
+                            localId = rec.originalMediaId,
+                            contentHash = rec.contentSha256,
+                            status = if (rec.backupCompletionState == "DELETED") "DELETED" else "ACTIVE",
+                            mediaType = rec.mediaType
+                        )
+                    }
+                    if (additionalRemotePhotos.isNotEmpty()) {
+                        DbHolder.database.remotePhotoDao().insertAllIfNotExists(*additionalRemotePhotos.toTypedArray())
+                    }
+                }
+
+                // Reconcile unverified/holding local photos with imported remote evidence
+                val reconciledCount = com.gallerysync.app.data.localdb.recovery.InstallRecoveryManager.reconcileLocalPhotosWithRemoteHistory(context)
+                Log.i(TAG, "Reconciled $reconciledCount local media items with imported backup metadata.")
             }
             context.toastFromMainThread(context.getString(R.string.import_successful))
         } catch (e: Exception) {
@@ -121,16 +182,40 @@ object BackupHelper {
 
                 val deviceId = Preferences.getOrCreateDeviceId()
                 val deviceName = Preferences.getDeviceName()
+                val botUsername = Preferences.getBotUsername()
 
                 val photos = DbHolder.database.photoDao().getAll()
                 val remotePhotos = DbHolder.database.remotePhotoDao().getAllIncludingDeleted()
+
+                val mediaRecords = remotePhotos.map { remote ->
+                    val linkedLocal = photos.find { it.remoteId == remote.remoteId || (remote.contentHash != null && it.contentHash == remote.contentHash) }
+                    ExportedMediaRecord(
+                        originalMediaId = remote.localId ?: linkedLocal?.localId ?: remote.remoteId,
+                        originalUri = linkedLocal?.pathUri,
+                        displayName = remote.fileName,
+                        fileSize = remote.fileSize,
+                        mediaType = remote.mediaType,
+                        modificationTimestamp = linkedLocal?.lastUploadAttempt,
+                        contentSha256 = remote.contentHash ?: linkedLocal?.contentHash,
+                        telegramFileId = remote.remoteId,
+                        telegramMessageId = remote.messageId,
+                        destinationChannelId = channelId.takeIf { it != 0L },
+                        botIdentityId = botUsername.takeIf { it.isNotBlank() },
+                        backupCompletionState = remote.status,
+                        backupTimestamp = remote.uploadedAt
+                    )
+                }
+
                 val backupFile = BackupFile(
-                    version = 2,
+                    version = 3,
                     deviceId = deviceId,
                     deviceName = deviceName,
                     createdAt = System.currentTimeMillis(),
+                    channelId = channelId.takeIf { it != 0L },
+                    botUsername = botUsername.takeIf { it.isNotBlank() },
                     photos = photos,
-                    remotePhotos = remotePhotos
+                    remotePhotos = remotePhotos,
+                    mediaRecords = mediaRecords
                 )
 
                 Log.i(TAG, "Database backup created: ${photos.size} photos, ${remotePhotos.size} remote photos (device: $deviceId)")
@@ -213,7 +298,32 @@ object BackupHelper {
                     DbHolder.database.remotePhotoDao().insertAllIfNotExists(*backupFile.remotePhotos.toTypedArray())
                 }
 
-                Log.i(TAG, "✅ Database imported successfully")
+                // If mediaRecords are present, ensure any missing records are merged into remote_photos
+                if (backupFile.mediaRecords.isNotEmpty()) {
+                    val existingRemoteIds = DbHolder.database.remotePhotoDao().getAllRemoteIds().toSet()
+                    val additionalRemotePhotos = backupFile.mediaRecords.filter { it.telegramFileId != null && it.telegramFileId !in existingRemoteIds }.map { rec ->
+                        com.gallerysync.app.data.localdb.entities.RemotePhoto(
+                            remoteId = rec.telegramFileId!!,
+                            photoType = rec.displayName?.substringAfterLast('.', "")?.ifEmpty { if (rec.mediaType == "VIDEO") "mp4" else "jpg" } ?: "jpg",
+                            fileName = rec.displayName,
+                            fileSize = rec.fileSize,
+                            uploadedAt = rec.backupTimestamp,
+                            messageId = rec.telegramMessageId,
+                            localId = rec.originalMediaId,
+                            contentHash = rec.contentSha256,
+                            status = if (rec.backupCompletionState == "DELETED") "DELETED" else "ACTIVE",
+                            mediaType = rec.mediaType
+                        )
+                    }
+                    if (additionalRemotePhotos.isNotEmpty()) {
+                        DbHolder.database.remotePhotoDao().insertAllIfNotExists(*additionalRemotePhotos.toTypedArray())
+                    }
+                }
+
+                // Reconcile unverified/holding local photos with imported remote evidence
+                com.gallerysync.app.data.localdb.recovery.InstallRecoveryManager.reconcileLocalPhotosWithRemoteHistory(context)
+
+                Log.i(TAG, "Database imported successfully")
 
                 Preferences.edit {
                     putLong("last_database_import_timestamp", System.currentTimeMillis())

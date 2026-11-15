@@ -22,27 +22,44 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
-
-        val localProperties = rootProject.file("local.properties")
-        if (localProperties.exists()) {
-            val properties = Properties()
-            localProperties.inputStream().use { properties.load(it) }
-        }
-
-
     }
+
+    val localProperties = Properties()
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use { localProperties.load(it) }
+    }
+
+    val releaseKeystorePath = localProperties.getProperty("release.keystore.file")
+        ?: System.getenv("GALLERYSYNC_KEYSTORE_FILE")
+    val releaseKeystorePassword = localProperties.getProperty("release.keystore.password")
+        ?: System.getenv("GALLERYSYNC_KEYSTORE_PASSWORD")
+    val releaseKeyAlias = localProperties.getProperty("release.key.alias")
+        ?: System.getenv("GALLERYSYNC_KEY_ALIAS")
+    val releaseKeyPassword = localProperties.getProperty("release.key.password")
+        ?: System.getenv("GALLERYSYNC_KEY_PASSWORD")
+
+    val hasReleaseSigning = !releaseKeystorePath.isNullOrBlank() &&
+            !releaseKeystorePassword.isNullOrBlank() &&
+            !releaseKeyAlias.isNullOrBlank() &&
+            !releaseKeyPassword.isNullOrBlank()
 
     signingConfigs {
         getByName("debug") {
             // Keep default debug signing
         }
-        create("release") {
-            // Use debug signing for release to avoid keystore issues
-            // This ensures we can build release APKs without signing problems
-            storeFile = signingConfigs.getByName("debug").storeFile
-            storePassword = signingConfigs.getByName("debug").storePassword
-            keyAlias = signingConfigs.getByName("debug").keyAlias
-            keyPassword = signingConfigs.getByName("debug").keyPassword
+        if (hasReleaseSigning) {
+            val keyFile = rootProject.file(releaseKeystorePath!!)
+            if (keyFile.exists()) {
+                create("release") {
+                    storeFile = keyFile
+                    storePassword = releaseKeystorePassword
+                    keyAlias = releaseKeyAlias
+                    keyPassword = releaseKeyPassword
+                }
+            } else {
+                logger.warn("Release keystore file does not exist at: ${keyFile.absolutePath}")
+            }
         }
     }
 
@@ -54,8 +71,13 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Use our release signing config (which uses debug keys to avoid keystore issues)
-            signingConfig = signingConfigs.getByName("release")
+            val releaseSigning = signingConfigs.findByName("release")
+            if (releaseSigning != null) {
+                signingConfig = releaseSigning
+            } else {
+                // Strictly disallow debug keystore fallback for release builds
+                signingConfig = null
+            }
         }
         create("debugMini") {
             initWith(getByName("debug"))

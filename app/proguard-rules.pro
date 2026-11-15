@@ -164,4 +164,10 @@
 -dontwarn android.arch.util.paging.CountedDataSource
 -dontwarn android.arch.persistence.room.paging.LimitOffsetDataSource
 
+# Jackson JSON Serialization for SAF BackupFile and ExportedMediaRecord
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
+-dontwarn com.fasterxml.jackson.**
+-keep class com.fasterxml.jackson.** { *; }
+-keep class com.gallerysync.app.data.localdb.backup.** { *; }
+
 -dontwarn com.google.errorprone.annotations.Immutable

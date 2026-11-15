@@ -254,12 +254,30 @@ class ManageUploadsViewModel(
     private val remoteToLocalIdMapFlow: Flow<Map<String, String>> = localPhotoLookupsFlow
         .map { it.idMap }
 
-    // Queued Photos (from DB — not yet uploaded, excluding excluded folders)
-    val queuedPhotos: StateFlow<List<Photo>> = DbHolder.database.photoDao().getAllNotUploadedFlow()
+    // Queued Photos (from DB — genuinely pending upload, excluding excluded folders and holding items)
+    val queuedPhotos: StateFlow<List<Photo>> = DbHolder.database.photoDao().getPendingUploadFlow()
         .onStart { emit(emptyList()) }
         .map { photos -> filterExcludedBucketPhotos(photos) }
         .flowOn(Dispatchers.IO)
         .stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Holding Photos (unverified media from initial baseline / reinstall, safely held from auto upload)
+    val holdingPhotos: StateFlow<List<Photo>> = DbHolder.database.photoDao().getAllHoldingFlow()
+        .onStart { emit(emptyList()) }
+        .map { photos -> filterExcludedBucketPhotos(photos) }
+        .flowOn(Dispatchers.IO)
+        .stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val holdingCount: StateFlow<Int> = DbHolder.database.photoDao().getHoldingCountFlow()
+        .stateIn(scope, SharingStarted.WhileSubscribed(5000), 0)
+
+    fun uploadAllHolding() {
+        scope.launch(Dispatchers.IO) {
+            val count = DbHolder.database.photoDao().releaseAllHoldingToPending()
+            Log.i("ManageUploadsVM", "Explicitly released $count holding photos to pending for upload")
+            WorkModule.PeriodicBackup.enqueue(type = "manual_backup")
+        }
+    }
 
     private suspend fun filterExcludedBucketPhotos(photos: List<Photo>): List<Photo> {
         if (photos.isEmpty()) return photos

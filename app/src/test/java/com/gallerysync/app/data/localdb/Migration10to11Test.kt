@@ -55,18 +55,19 @@ class Migration10to11Test {
             v10Db.close()
         }
 
-        // Step 2: Open with Room using registered migrations up to current version 12
+        // Step 2: Open with Room using registered migrations up to current version 13
         val roomDb = Room.databaseBuilder(context, WhDatabase::class.java, dbName)
             .addMigrations(
                 com.gallerysync.app.data.localdb.migration.Migration10to11_VideoSupport(),
-                com.gallerysync.app.data.localdb.migration.Migration11to12_UploadQueueUnique()
+                com.gallerysync.app.data.localdb.migration.Migration11to12_UploadQueueUnique(),
+                com.gallerysync.app.data.localdb.migration.Migration12to13_ChunkedBackup()
             )
             .build()
 
         try {
             // Force database opening, migration execution, and Room schema validation
             val writableDb = roomDb.openHelper.writableDatabase
-            assertEquals(12, writableDb.version)
+            assertEquals(13, writableDb.version)
 
             // Step 3: Verify record counts
             val photoDao = roomDb.photoDao()

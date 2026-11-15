@@ -101,6 +101,30 @@ interface PhotoDao {
     @Query("SELECT * FROM photos WHERE uploadStatus IN ('NONE', 'FAILED', 'UPLOADING') AND remoteId IS NULL ORDER BY lastUploadAttempt DESC")
     fun getPendingUploadFlow(): Flow<List<Photo>>
 
+    @Query("SELECT * FROM photos WHERE uploadStatus = 'HOLDING' AND remoteId IS NULL")
+    suspend fun getAllHolding(): List<Photo>
+
+    @Query("SELECT * FROM photos WHERE uploadStatus = 'HOLDING' AND remoteId IS NULL")
+    fun getAllHoldingFlow(): Flow<List<Photo>>
+
+    @Query("SELECT COUNT(*) FROM photos WHERE uploadStatus = 'HOLDING' AND remoteId IS NULL")
+    fun getHoldingCountFlow(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM photos WHERE uploadStatus = 'HOLDING' AND remoteId IS NULL")
+    suspend fun getHoldingCount(): Int
+
+    @Query("UPDATE photos SET uploadStatus = 'NONE' WHERE uploadStatus = 'HOLDING' AND remoteId IS NULL")
+    suspend fun releaseAllHoldingToPending(): Int
+
+    @Query("UPDATE photos SET uploadStatus = 'NONE' WHERE localId IN (:localIds) AND uploadStatus = 'HOLDING'")
+    suspend fun releaseHoldingToPending(localIds: List<String>): Int
+
+    @Query("UPDATE photos SET uploadStatus = 'HOLDING' WHERE uploadStatus = 'NONE' AND remoteId IS NULL")
+    suspend fun markAllUnverifiedAsHolding(): Int
+
+    @Query("SELECT COUNT(*) FROM photos WHERE uploadStatus = 'NONE' AND remoteId IS NULL")
+    suspend fun getUnverifiedNoneCount(): Int
+
     @Query("UPDATE photos SET deviceId = :deviceId WHERE localId = :localId")
     suspend fun setDeviceId(localId: String, deviceId: String)
 

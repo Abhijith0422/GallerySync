@@ -331,13 +331,13 @@ data class ScannedMediaItem(
 ) {
     val isVideo: Boolean get() = mediaType == "VIDEO" || mimeType.startsWith("video/")
 
-    fun toPhoto(): Photo = Photo(
+    fun toPhoto(defaultUploadStatus: String = Photo.STATUS_NONE): Photo = Photo(
         localId = id,
         remoteId = null,
         photoType = photoType,
         pathUri = contentUri,
         contentHash = null,
-        uploadStatus = "NONE",
+        uploadStatus = defaultUploadStatus,
         deviceId = deviceId,
         lastUploadAttempt = null,
         uploadRetryCount = 0,
