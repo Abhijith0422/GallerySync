@@ -1,295 +1,516 @@
-<!-- ---------- Header ---------- -->
+# GallerySync
+
 <div align="center">
-  <img src="app/src/main/res/drawable/chitralaya.png" width="200" height="200">
-  <h1>Chitralaya CloudGallery</h1>
-  <h4><em>"Chitralaya" ((चित्रालय)) = "House of Images" in Sanskrit</em></h4>
-  <h3>🚀 Your Personal Photo Vault with Unlimited Cloud Storage</h3>
-  <p><strong>Transform Telegram into your private, unlimited photo backup solution!</strong></p>
-  <p>🔒 <em>100% Private • No Telemetry • Your Data, Your Control</em></p>
 
-<!-- ---------- Badges ---------- -->
-  <div align="center">
-    <!-- <img alt="License" src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square"> -->
-    <!-- <img alt="Downloads" src="https://img.shields.io/github/downloads/AKS-Labs/CloudGallery/total?color=c3e7ff&style=flat-square"> -->
-    <img alt="Last commit" src="https://img.shields.io/github/last-commit/AKS-Labs/CloudGallery?color=c3e7ff&style=flat-square">
-    <img alt="Repo size" src="https://img.shields.io/github/repo-size/AKS-Labs/CloudGallery?color=c3e7ff&style=flat-square">
-    <!-- <img alt="Stars" src="https://img.shields.io/github/stars/AKS-Labs/CloudGallery?color=c3e7ff&style=flat-square"> -->
-    <br>
+  <h1>📸 GallerySync</h1>
+  <h3>Your Gallery. Your Telegram. Your Backup.</h3>
 
-  <img src="https://hits.sh/github.com/AKS-Labs/CloudGallery.svg?style=for-the-badge&label=Page%20Views&extraCount=2000&color=ff3f6f&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJzdmctaWNvbiIgc3R5bGU9IndpZHRoOiAxZW07IGhlaWdodDogMWVtO3ZlcnRpY2FsLWFsaWduOiBtaWRkbGU7ZmlsbDojZmZmZmZmO292ZXJmbG93OiBoaWRkZW47IiB2aWV3Qm94PSIwIDAgMTAyNCAxMDI0IiB2ZXJzaW9uPSIxLjEiPjxwYXRoIGQ9Ik01MTIgMzg0YTEyOCAxMjggMCAwIDAtMTI4IDEyOCAxMjggMTI4IDAgMCAwIDEyOCAxMjggMTI4IDEyOCAwIDAgMCAxMjgtMTI4IDEyOCAxMjggMCAwIDAtMTI4LTEyOG0wIDM0MS4zMzMzMzNhMjEzLjMzMzMzMyAyMTMuMzMzMzMzIDAgMCAxLTIxMy4zMzMzMzMtMjEzLjMzMzMzMyAyMTMuMzMzMzMzIDIxMy4zMzMzMzMgMCAwIDEgMjEzLjMzMzMzMy0yMTMuMzMzMzMzIDIxMy4zMzMzMzMgMjEzLjMzMzMzMyAwIDAgMSAyMTMuMzMzMzMzIDIxMy4zMzMzMzMgMjEzLjMzMzMzMyAyMTMuMzMzMzMzIDAgMCAxLTIxMy4zMzMzMzMgMjEzLjMzMzMzM20wLTUzMy4zMzMzMzNDMjk4LjY2NjY2NyAxOTIgMTE2LjQ4IDMyNC42OTMzMzMgNDIuNjY2NjY3IDUxMmM3My44MTMzMzMgMTg3LjMwNjY2NyAyNTYgMzIwIDQ2OS4zMzMzMzMgMzIwczM5NS41Mi0xMzIuNjkzMzMzIDQ2OS4zMzMzMzMtMzIwYy03My44MTMzMzMtMTg3LjMwNjY2Ny0yNTYtMzIwLTQ2OS4zMzMzMzMtMzIweiIgZmlsbD0iIi8%2BPC9zdmc%2B&labelColor=870b2a"/>
+**A native Android application for automatically backing up photos and videos to your private Telegram channel.**
 
-<a href="https://github.com/AKS-Labs/CloudGallery/releases">
-  
-  <img src="https://img.shields.io/github/downloads/AKS-Labs/CloudGallery/total?color=ff9500&style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHRpdGxlPmRvd25sb2FkPC90aXRsZT48cGF0aCBkPSJNNSwyMEgxOVYxOEg1TTE5LDlIMTVWM0g5VjlINUwxMiwxNkwxOSw5WiIgZmlsbD0id2hpdGUiIC8+PC9zdmc+&labelColor=a6660d"/>
-  
-</a>
-  
-<a href="https://github.com/AKS-Labs/CloudGallery/stargazers">
-  
-  <img src="https://img.shields.io/github/stars/AKS-Labs/CloudGallery?color=ffff00&style=for-the-badge&labelColor=a1a116&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHRpdGxlPnN0YXI8L3RpdGxlPjxwYXRoIGQ9Ik0xMiwxNy4yN0wxOC4xOCwyMUwxNi41NCwxMy45N0wyMiw5LjI0TDE0LjgxLDguNjJMMTIsMkw5LjE5LDguNjJMMiw5LjI0TDcuNDUsMTMuOTdMNS44MiwyMUwxMiwxNy4yN1oiIGZpbGw9IndoaXRlIiAvPjwvc3ZnPg=="/>
-  
-</a>
-</div>
+  <p>
+    🔒 Privacy-conscious · 📡 Wi-Fi-only automatic backup · 🚀 Open source
+  </p>
 
-<!-- ----------   Labels ---------- -->
-<div align="center">
-  <img alt="API" src="https://img.shields.io/badge/Api%2029+-50f270?logo=android&logoColor=black&style=for-the-badge"/>
-  <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-a503fc?logo=kotlin&logoColor=white&style=for-the-badge"/>
-  <img alt="Jetpack Compose" src="https://img.shields.io/static/v1?style=for-the-badge&message=Jetpack+Compose&color=4285F4&logo=Jetpack+Compose&logoColor=FFFFFF&label="/>
-  <img alt="material" src="https://custom-icon-badges.demolab.com/badge/material%20you-lightblue?style=for-the-badge&logocolor=333&logo=material-you"/>
-</div>
+  <img src="https://img.shields.io/badge/Platform-Android-green?style=for-the-badge&logo=android" />
+  <img src="https://img.shields.io/badge/Language-Kotlin-purple?style=for-the-badge&logo=kotlin" />
+  <img src="https://img.shields.io/badge/UI-Jetpack%20Compose-blue?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/Minimum%20SDK-35-brightgreen?style=for-the-badge" />
+
 </div>
 
 ---
 
-## 🌟 What is CloudGallery?
+## 🌟 What is GallerySync?
 
-**Chitralaya CloudGallery** is an open-source Android application that turns your Telegram account into a private photo and video cloud storage — no third-party signup, no intermediate servers, and no telemetry.
+**GallerySync** is a native Android application that turns your private Telegram channel into a personal photo and video backup destination.
 
-Your media is transmitted straight from your phone to your own private Telegram channel or group, providing free, unlimited backup space with full control over your data.
+Instead of depending on another cloud storage provider, GallerySync uses the official Telegram Bot API to transfer your media directly from your Android device to a Telegram channel that you control.
 
-> **Original Work Attribution**: This project is originally derived from and built upon the foundational open-source architecture of the **[Whitehole](https://github.com/beradeep/whitehole/)** project created by **Deep Bera ([@beradeep](https://github.com/beradeep))**, made available under the Apache License 2.0. We gratefully acknowledge and credit Deep Bera's pioneering work in transforming Telegram into an Android photo backup solution.
+The application automatically discovers accessible gallery media, maintains a persistent upload queue, and synchronizes eligible media when an allowed network connection is available.
 
----
+GallerySync is built using Kotlin and Jetpack Compose, with a focus on reliability, background synchronization, and user control.
 
-## 👋 Hey there!
+### Why GallerySync?
 
-I’m **Aditya**, the guy behind **AKS-Labs**.
+- 📸 Back up photos and videos from your Android gallery.
+- ☁️ Use your own private Telegram channel as the destination.
+- 🔄 Automatically discover newly added media.
+- 📶 Restrict automatic backups to Wi-Fi.
+- 📂 Maintain a persistent upload queue.
+- 🔁 Recover interrupted uploads and retry failed transfers.
+- 🔐 Store Telegram credentials using Android Keystore-backed encryption.
+- 📴 Keep pending media queued when the network is unavailable.
 
-Before you scroll, let me make one thing clear —
-
-I’m just another user like you, tired of the usual _“cloud storage deal”_ — free at first,  
-then you pay with your money... or even worse, with your privacy.
-
-So I built something different — **Chitralaya CloudGallery**.
-
-- It’s not a company, not a service.
-- Just a simple, open-source tool —
-
-a bridge between your Android phone 📱 and your Telegram account 📡.
+**Your device. Your Telegram bot. Your backup destination.**
 
 ---
 
-## 🤔 Why even build this?
+## ✨ Features
 
-I was using Google Photos like everyone else. Free storage, nice features, AI magic… but then I realized:
+### 📸 Photo and Video Backup
 
-- Google scans my photos to “offer me memories” → which also means they _read_ them.
-- Google uses user data to personalize services, show relevant ads, improve products,services.
-- We users don’t even know or read what other privacy-concerning terms we’ve agreed to at the time of sign-up.
-- And will they only use data collected from Google Photos to improve Google Photos — or does it include all Google products?
-- Sharing a link doesn’t mean it’s private — anyone with that link can see your photos.
-- Needs to compress images when free storage is full.
-- One day, “free storage is full” and they said: “Pay up for more storage.”
+- Supports gallery images and videos.
+- Discovers existing media during initial backup.
+- Detects newly added media through MediaStore observation.
+- Extracts image and video metadata.
+- Displays video thumbnails, dimensions, and duration.
+- Preserves original media files during upload.
 
-Google, builds entire business models around data.
+### 🔄 Automatic Synchronization
 
-That’s when it hit me: my photos aren’t _mine_.
+- Automatically discovers new gallery media.
+- Uses Android WorkManager for background synchronization.
+- Supports persistent queue processing.
+- Resumes eligible work after process termination and device reboot.
+- Avoids repeatedly uploading completed media.
+- Uses content fingerprints for duplicate detection.
 
-I wanted something unlimited, private, and mine.
-And then I looked at Telegram.
+### 📶 Wi-Fi-Only Backup
 
----
+Automatic synchronization is restricted to eligible network connections.
 
-## 🔒 Privacy, Security & Telegram Architecture
+- Wi-Fi-only automatic backup is enabled by default.
+- Mobile data is not used for automatic backups.
+- Metered Wi-Fi can be allowed explicitly.
+- Manual mobile-data uploads can be enabled separately.
+- Pending uploads remain queued when network conditions are unsuitable.
 
-**Transparency First**: GallerySync is an open-source backup tool designed to give you direct control of your media without intermediary third-party clouds. To make an informed decision, here is exactly how media transfer, storage, and privacy operate:
+### 📋 Persistent Upload Queue
 
-### 1. Direct Transmission via Telegram Bot API
+GallerySync maintains a Room database-backed upload queue.
 
-- All photos and videos are transmitted directly from your Android device to Telegram’s official Bot API servers (`api.telegram.org`) over TLS/HTTPS.
-- Uploads are directed exclusively to your own user-configured private channel or group.
+Queue capabilities include:
 
-### 2. Telegram Server Storage & Encryption Model
+- Pending uploads.
+- Active uploads.
+- Completed uploads.
+- Failed uploads.
+- Scheduled retries.
+- Oversized media tracking.
+- Missing source tracking.
+- Manual retry and cancellation.
+- Recovery of interrupted uploads.
 
-- **No End-to-End Encryption (E2EE)**: Ordinary Telegram Bot API channel uploads are **not end-to-end encrypted**.
-- While data is encrypted in transit and stored securely on Telegram's cloud storage servers, Telegram processes and stores your media, and Telegram infrastructure holds the technical keys to process those messages.
-- If you require zero-knowledge encryption where cloud providers cannot read the file data under any circumstances, note that **on-device pre-upload encryption is a planned future enhancement**, not a present capability. Today, media is uploaded in its original format.
+The queue is designed to survive application restarts, process termination, and device reboots.
 
-### 3. Channel Access Boundary
+### 🤖 Telegram Integration
 
-- Media uploaded to your Telegram channel is accessible to **anyone with access to that channel** (channel administrators, members, or invitees).
-- Keep your private channel strictly restricted to yourself (and trusted recipients you intentionally add).
+GallerySync uses the official Telegram Bot API.
 
-### 4. Zero Intermediary Servers or Telemetry
+- Connect your own Telegram bot.
+- Configure a private channel as the backup destination.
+- Verify bot and channel permissions.
+- Send test messages.
+- Upload photos and videos.
+- Support Telegram channel topics where configured.
+- Handle Telegram API errors and rate limits.
 
-- **No Third-Party Infrastructure**: GallerySync operates no storage servers, telemetry services, crash analytics, user accounts, or proxy infrastructure.
-- The app never communicates with any third-party servers. All interactions occur solely between your device and Telegram.
+### 🔐 Credential Security
 
-### 5. Local Credential Security
-
-- Your Telegram Bot Token, Private Channel Chat ID, and Forum Topic ID are encrypted on-device using the **Android Keystore (AES-256 GCM)** via `EncryptedSharedPreferences`.
-- Credentials are never exposed in log output or sent to any server other than Telegram's official API.
-
-### 6. Local Database & Metadata Persistence
-
-- GallerySync uses a local **Room SQLite database** on your device to track indexed photos, upload queue states, and Telegram remote message IDs.
-- For disaster recovery across reinstalls, a metadata backup can be synced to your private channel so you can restore your library index. This metadata file contains identifiers and hashes, not your photo binaries.
-
----
-
-## ✨ What can it do today?
-
-- 📸 Unlimited photo backup → via your Telegram bot
-- 🔄 Smart sync → detects changes automatically
-- 🎨 Modern Material 3 UI → clean, minimal, simple
-- 📱 Database import/export → restore your photo history across devices
-- 🖼️ Browse synced photos in a proper gallery (not Telegram’s clunky file view)
-- 🔒 Strong key storage for tokens
-
----
-
-## 🔮 What can it do tomorrow?
-
-Here’s where you come in. CloudGallery is community-powered. With your support, I want to add:
-
-- 📤 Batch Upload & Delete
-- 🌙 Auto Sync at Bedtime
-- 📆 Control How Many Photos to Back Up Per Day (e.g. 40 images/day)
-- ⏰ Schedule Time for Auto Periodic Backup (e.g. between 12 AM – 6 AM)
-- 📂 Folder-Specific Uploads
-- ☁️ Organized Folder Structure for Cloud Images
-- 🖼️ Share Images from Any App to Chitralaya CloudGallery to Upload Them Directly to Telegram via Chitralaya
-- 🧠 100% Offline On-Device OCR Search (Find Photos by Text Inside Them)
-- 🤖 Multiple Bot Support
-- 🔐 **On-device encryption layer** → so even Telegram can’t peek into your files
-- ✨ Even smoother Material 3 experience
-- 💡 And honestly… whatever _you_ suggest in the Telegram group
-
-These aren’t “marketing slides”. They’re real ideas sitting in my notes, waiting for time and [**Support**](https://github.com/sponsors/AKS-Labs).
+- Telegram bot tokens are encrypted using Android Keystore-backed encrypted preferences.
+- Credentials are not intentionally exposed in application logs.
+- Production installations do not fall back to plaintext credential storage.
+- No separate GallerySync account is required.
 
 ---
 
-## ❤️ Final Words
+## 🏗️ Technology Stack
 
-I’m not a company. I’m not trying to “capture market share.”
-I’m just one developer building something I wanted for myself — and thought others might find useful.
+| Component               | Technology                                                   |
+| ----------------------- | ------------------------------------------------------------ |
+| Programming language    | Kotlin                                                       |
+| UI framework            | Jetpack Compose                                              |
+| Design system           | Material 3                                                   |
+| Architecture            | Existing CloudGallery architecture, extended for GallerySync |
+| Local database          | Room / SQLite                                                |
+| Background processing   | Android WorkManager                                          |
+| Media discovery         | Android MediaStore                                           |
+| Network communication   | Telegram Bot API                                             |
+| Image loading           | Coil                                                         |
+| Credential storage      | Android Keystore / EncryptedSharedPreferences                |
+| Minimum Android version | Android 15 (API 35)                                          |
+| Target Android version  | API 36                                                       |
 
-If you like CloudGallery and want to see it grow:
-
-- ⭐ Star the repo
-- 💬 Join the [AKS-Labs Telegram group](https://t.me/AKSLabs)
-- ☕ Maybe [**Donate**](https://github.com/sponsors/AKS-Labs), if you can.
-
-At the end of the day, this is about choice.
-If you don’t like it, you lose nothing.
-If you do, you gain control over your memories.
-
-Your photos, your choice.
+**Application ID:** `com.gallerysync.app`
 
 ---
 
-## 📥 **Get Chitralaya CloudGallery**
+## 🔄 How It Works
+
+```text
+        Android Gallery
+               |
+               v
+       MediaStore Scanner
+               |
+               v
+       Local Room Database
+               |
+               v
+       Persistent Upload Queue
+               |
+               v
+     Wi-Fi / Network Eligibility
+               |
+               v
+      Queue Processing Worker
+               |
+               v
+       Telegram Upload Dispatcher
+               |
+               v
+       Telegram Bot API
+               |
+               v
+      Your Private Telegram Channel
+```
+
+### Upload Process
+
+1. GallerySync scans accessible photos and videos.
+2. Media metadata is registered in the local database.
+3. Eligible media is added to the persistent upload queue.
+4. The network policy checks whether synchronization is allowed.
+5. The queue processor claims media items atomically.
+6. The Telegram dispatcher selects the appropriate upload method.
+7. Telegram receives the media.
+8. GallerySync records the upload result and remote message information.
+
+If an upload is interrupted, the queue can recover the item and schedule another attempt.
+
+---
+
+## 🚀 Getting Started
+
+### Requirements
+
+- Android device running Android 15 or newer.
+- Telegram account.
+- Telegram bot created using BotFather.
+- Private Telegram channel.
+- Internet connection for initial setup and uploads.
+
+### Step 1: Create a Telegram Bot
+
+1. Open Telegram.
+2. Search for [@BotFather](https://t.me/BotFather).
+3. Send `/newbot`.
+4. Follow the instructions to create your bot.
+5. Copy the generated bot token.
+
+**Important:** Never share your bot token publicly or commit it to GitHub.
+
+### Step 2: Create a Private Telegram Channel
+
+1. Create a new Telegram channel.
+2. Set its visibility to Private.
+3. Open the channel's administrator settings.
+4. Add your newly created bot as an administrator.
+5. Enable permission to post messages.
+
+GallerySync needs administrator and posting permissions to upload media to the channel.
+
+### Step 3: Obtain Your Channel Chat ID
+
+The Telegram channel Chat ID is different from a group Chat ID.
+
+To obtain it manually:
+
+1. Add your bot as an administrator to the private channel.
+2. Publish a new message in the channel.
+3. Use the Telegram Bot API `getUpdates` method to retrieve the channel update.
+4. Find the `channel_post.chat.id` field in the response.
+5. Copy the numeric Chat ID, preserving the minus sign.
+
+Example response structure:
+
+```json
+{
+    "channel_post": {
+        "chat": {
+            "id": -1001234567890,
+            "title": "My Private Gallery",
+            "type": "channel"
+        }
+    }
+}
+```
+
+The example ID is illustrative only.
+
+**Note:** Telegram's `getUpdates` method cannot be used while an outgoing webhook is configured. If another application is polling the same bot, it may also interfere with update retrieval.
+
+### Step 4: Connect GallerySync
+
+1. Install and open GallerySync.
+2. Grant the required photo and video permissions.
+3. Open Telegram Connection settings.
+4. Enter your bot token.
+5. Enter your private channel Chat ID.
+6. Verify the connection.
+7. Confirm that the bot has administrator and posting permissions.
+8. Send a test message.
+
+Once connected, GallerySync can begin backing up eligible media.
+
+### Step 5: Configure Automatic Backup
+
+Open the backup settings and configure:
+
+- Wi-Fi-only automatic backup.
+- Metered Wi-Fi preference.
+- Manual mobile-data upload permission.
+- Automatic synchronization preferences.
+
+The default configuration prevents automatic uploads over cellular data and metered Wi-Fi.
+
+---
+
+## 📦 Telegram Upload Limitations
+
+GallerySync uses Telegram's hosted Bot API.
+
+The hosted Bot API has file-size restrictions:
+
+| Media operation | Hosted Bot API limit |
+| --------------- | -------------------: |
+| sendPhoto       |                10 MB |
+| sendVideo       |                50 MB |
+| sendDocument    |                50 MB |
+
+GallerySync uses the appropriate Telegram upload method for supported media formats.
+
+- MP4 and M4V videos use the video upload method.
+- Other supported video formats can be sent as documents.
+- Images use the existing image/document upload pipeline.
+- Media exceeding the applicable upload limit is retained in the queue and reported to the user.
+
+**Important:** Sending a file as a document does not bypass the hosted Bot API's 50 MB upload limit.
+
+These restrictions are imposed by Telegram, not GallerySync.
+
+---
+
+## 🔒 Privacy, Security and Data Handling
+
+GallerySync is designed to minimize external infrastructure and give users control over their backup destination.
+
+### Direct Telegram Transmission
+
+Media is transmitted from the Android device to Telegram's official Bot API over HTTPS.
+
+GallerySync does not operate its own media storage server.
+
+### Telegram Encryption Model
+
+**Telegram Bot API uploads are not end-to-end encrypted.**
+
+Telegram processes and stores uploaded media on its cloud infrastructure. Telegram's infrastructure can access the content necessary to operate its services.
+
+GallerySync should therefore not be considered a zero-knowledge or end-to-end encrypted cloud storage solution.
+
+### Channel Access
+
+Media uploaded to your private channel can be accessed by people who have permission to view that channel.
+
+Keep your channel private and restrict membership to trusted users.
+
+### Local Credential Protection
+
+Bot tokens and channel configuration are stored using Android Keystore-backed encryption.
+
+Credentials should never be included in screenshots, logs, source code, or public issue reports.
+
+### Local Database
+
+GallerySync uses Room/SQLite to store:
+
+- Indexed media metadata.
+- Upload queue records.
+- Upload status.
+- Content fingerprints.
+- Telegram remote message identifiers.
+- Synchronization information.
+
+The database is stored locally on the device.
+
+### Analytics and Tracking
+
+GallerySync does not intentionally integrate third-party advertising or user-tracking SDKs.
+
+Review the application's actual dependency and network configuration before relying on this statement for a particular release.
+
+---
+
+## 🧪 Development and Build
+
+### Prerequisites
+
+- Android Studio.
+- JDK 17.
+- Android SDK 35 or newer.
+- Gradle wrapper included in the repository.
+
+### Clone the Repository
+
+```bash
+git clone YOUR_GALLERYSYNC_REPOSITORY_URL
+cd GallerySync
+```
+
+### Build Debug APK
+
+On Windows:
+
+```powershell
+.\gradlew assembleDebug
+```
+
+On Linux/macOS:
+
+```bash
+./gradlew assembleDebug
+```
+
+### Run Unit Tests
+
+Windows:
+
+```powershell
+.\gradlew testDebugUnitTest
+```
+
+Linux/macOS:
+
+```bash
+./gradlew testDebugUnitTest
+```
+
+### Clean Build
+
+```bash
+.\gradlew clean
+.\gradlew compileDebugKotlin assembleDebug testDebugUnitTest
+```
+
+The generated debug APK is located at:
+
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
+
+---
+
+## 🛣️ Project Roadmap
+
+Potential future improvements include:
+
+- [ ] Automatic Telegram channel detection.
+- [ ] Full-file SHA-256 duplicate verification.
+- [ ] On-device encryption before upload.
+- [ ] Advanced folder-specific backup controls.
+- [ ] More detailed backup scheduling.
+- [ ] Improved metadata restoration and migration tools.
+- [ ] Additional media organization features.
+- [ ] Signed production release and distribution.
+
+Features may change as development progresses.
+
+---
+
+## ⚠️ Important Notes
+
+- GallerySync requires access to the media you want to back up.
+- Android permission restrictions determine which media can be indexed.
+- Automatic backup requires an eligible network connection.
+- Telegram's hosted Bot API imposes upload-size restrictions.
+- Telegram Bot API channel uploads are not end-to-end encrypted.
+- Uninstalling the application can remove its local database and credentials.
+- A new installation may require reconnecting your bot and rebuilding the local media index.
+- Telegram is an external service and its availability and API restrictions are outside GallerySync's control.
+
+---
+
+## 🙏 Credits and Acknowledgements
+
+GallerySync is built upon the work of developers who contributed to the original open-source projects from which it evolved.
+
+We sincerely acknowledge the original authors and maintainers.
+
+### 1. Whitehole – Deep Bera
+
+**Original author:** [Deep Bera (@beradeep)](https://github.com/beradeep)
+
+**Original project:** [Whitehole](https://github.com/beradeep/whitehole)
+
+Whitehole provided foundational ideas and implementation work for transforming Telegram into an Android media backup solution.
+
+We acknowledge Deep Bera for the original project and the architectural groundwork shared with the open-source community.
+
+### 2. Chitralaya CloudGallery – AKS-Labs
+
+**Original project and maintainer:** [Chitralaya CloudGallery – AKS-Labs](https://github.com/AKS-Labs/CloudGallery)
+
+**Original maintainer:** Aditya / AKS-Labs
+
+GallerySync is derived from and extends the Chitralaya CloudGallery codebase.
+
+We acknowledge Aditya and the AKS-Labs contributors for developing, maintaining, and sharing Chitralaya CloudGallery, including its Android application architecture and Telegram integration.
+
+GallerySync builds upon that foundation with substantial changes and additions, including:
+
+- GallerySync project identity and package migration.
+- Expanded image and video support.
+- Android 15 media permission handling.
+- Persistent upload queue architecture.
+- Queue recovery and retry scheduling.
+- Unified network eligibility policy.
+- Wi-Fi-only automatic synchronization.
+- Additional testing and reliability improvements.
+
+### 3. Other Open-Source Technologies
+
+We also acknowledge the developers and maintainers of the technologies used by this project:
+
+- [Android Jetpack](https://developer.android.com/jetpack)
+- [Jetpack Compose](https://developer.android.com/compose)
+- [Kotlin](https://kotlinlang.org/)
+- [Room](https://developer.android.com/training/data-storage/room)
+- [WorkManager](https://developer.android.com/topic/libraries/architecture/workmanager)
+- [Coil](https://coil-kt.github.io/coil/)
+- [Telegram Bot API](https://core.telegram.org/bots/api)
+
+**Please retain all applicable upstream copyright notices, license files, and attribution requirements when redistributing this project.**
+
+---
+
+## 🤝 Contributing
+
+Contributions, bug reports, and suggestions are welcome.
+
+1. Fork the repository.
+2. Create a feature branch.
+3. Make your changes.
+4. Test your implementation.
+5. Submit a pull request with a clear description.
+
+For bugs and feature requests, use the repository's GitHub Issues section.
+
+---
+
+## ❤️ A Final Note
+
+GallerySync continues the work of an open-source project built by developers who wanted a different approach to personal media backup.
+
+We believe users should have more control over where their memories are stored and how their data is transferred.
+
+This project stands on the work of its predecessors and the open-source community.
+
+**Your Gallery. Your Telegram. Your Backup.**
 
 <div align="center">
-    <p align="center">
-  <a href="https://f-droid.org/packages/com.akslabs.cloudgallery/">
-    <img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"
-         alt="Get it on F-Droid"
-         height="80">
-  </a>
-  <a href="https://github.com/AKS-Labs/CloudGallery/releases">
-    <img alt="Get it on GitHub" src="https://user-images.githubusercontent.com/69304392/148696068-0cfea65d-b18f-4685-82b5-329a330b1c0d.png" height="80px">
-  </a>
-  <br>
-  <p><strong>• 🔓 Open Source    • 🚀 Ready to Use</strong></p>
-</div>
 
----
+  <h3>📸 GallerySync</h3>
+  <p><em>Built on open-source foundations. Extended for reliable media backup.</em></p>
 
-## 🚀 **Quick Setup**
-
-### 🤖 **Step 1: Create Telegram Bot**
-
-1. Open Telegram → Search `@BotFather`
-2. Send `/newbot` → Follow prompts
-3. Copy your bot token 🔑
-4. Create private group → Add bot → Type `/start` → Get chat ID
-    - Usually, the **chat ID** will appear automatically.
-    - If it **doesn’t**, click below for the alternate method 👇
-
-<details>
-<summary>🔍 How to Find Chat ID (Alternate Method)👇</summary>
-
-1.  Go to **[web.telegram.org](https://web.telegram.org)** and log in.
-2.  Open the **group** where you added your bot.
-3.  Look at your browser’s **address bar (URL)** — you’ll see something like:
-
-          https://web.telegram.org/k/#123456789
-
-4.  The number after the `#` is your **Group ID** → `123456789`.
-5.  Add `-100` in front to use it with the **Bot API**:
-
-         -100123456789
-
-6.  That’s your full **chat_id** ✅  
-    Use it inside the app or in your API.
-
-</details>
-
----
-
-### 📱 **Step 2: Connect the App**
-
-1. Download **CloudGallery** from GitHub.
-2. Enter your **bot token** and **chat ID**.
-3. Start backing up your photos! 🎉
-
----
-
-💬 **Need help?**  
-Join the community → [t.me/AKSLabs](https://t.me/AKSLabs)
-
----
-
-## 📱 **Screenshots**
-
-<div align="center">
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1.png" width="30%" alt="Main Screen">
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/2.png" width="30%" alt="Photo Gallery">
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/3.png" width="30%" alt="Settings">
-</div>
-
-<div align="center">
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/4.png" width="30%" alt="Cloud Sync">
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/5.png" width="30%" alt="Backup Progress">
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/6.png" width="30%" alt="Photo Viewer">
-</div>
-
----
-
-## 🤝 **Community**
-
-- 🐛 **Bug reports:** [GitHub Issues](https://github.com/AKS-Labs/CloudGallery/issues)
-- 💡 **Feature requests:** [GitHub Issues](https://github.com/AKS-Labs/CloudGallery/issues)
-- 👨‍💻 **Contribute:** Fork and submit pull requests
-- ⭐ **Show support:** Star the repository!
-
----
-
-
-## 🙏 **Credits & Attribution**
-
-This project is built on the foundations and contributions of the open-source community:
-
-- **[Whitehole](https://github.com/beradeep/whitehole/)** by **Deep Bera ([@beradeep](https://github.com/beradeep))**:
-    - **Original Work & Architecture**: The core concept, early MediaStore indexing implementation, and Room database architecture (`wh_database`) were originally authored and open-sourced by Deep Bera in the Whitehole project.
-    - **License**: Derived under the terms of the [Apache License, Version 2.0](LICENSE-APACHE-2.0.md).
-    - We express our sincere gratitude to Deep Bera for creating and sharing the foundational codebase.
-- **[kotlin-telegram-bot](https://github.com/kotlin-telegram-bot/kotlin-telegram-bot)**:
-    - Kotlin wrapper library for Telegram Bot API communication and command dispatching.
-- **Google Material Design**:
-    - [Material Icons](https://material.io/resources/icons/) and Material 3 design system for UI components.
-- **Android Jetpack & Libraries**:
-    - Jetpack Compose, Room Database, WorkManager, OkHttp, Retrofit, and Coil.
-
----
-
-<div align="center">
-  <h3>🔒 **Your Photos. Your Privacy. Your Control.** 🔒</h3>
-  <p><strong>Experience unlimited photo backup without compromising your privacy!</strong></p>
-
-  <a href="https://github.com/AKS-Labs/CloudGallery/releases">
-    <strong>📥 Download CloudGallery Today!</strong>
-  </a>
 </div>
