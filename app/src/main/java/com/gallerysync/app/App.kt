@@ -74,7 +74,8 @@ class App : Application(), androidx.work.Configuration.Provider {
                 android.util.Log.e("App", "Error checking baseline on startup", e)
             }
             try {
-                UploadQueueRepository.recoverStaleUploads()
+                // On process startup, recover any interrupted IN_PROGRESS uploads immediately
+                UploadQueueRepository.recoverStaleUploads(staleThresholdMs = 0L)
             } catch (e: Exception) {
                 android.util.Log.e("App", "Error recovering stale uploads on startup", e)
             }

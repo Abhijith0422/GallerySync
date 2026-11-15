@@ -170,7 +170,9 @@ class PeriodicPhotoBackupWorker(
                 }
             }
         } finally {
-            UploadQueueRepository.releaseWorkerClaims(workerToken)
+            withContext(kotlinx.coroutines.NonCancellable) {
+                UploadQueueRepository.releaseWorkerClaims(workerToken)
+            }
         }
     }
 
