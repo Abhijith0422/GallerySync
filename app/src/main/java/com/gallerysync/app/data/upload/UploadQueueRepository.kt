@@ -291,7 +291,7 @@ object UploadQueueRepository {
             for (item in staleItems) {
                 val affected = uploadQueueDao.resetStaleItem(item.id)
                 if (affected > 0) {
-                    photoDao.updateUploadStatus(item.localId, "FAILED", now)
+                    photoDao.updateUploadStatus(item.localId, "NONE", now)
                     recovered++
                 }
             }

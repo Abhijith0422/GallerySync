@@ -1,4 +1,4 @@
-﻿package com.gallerysync.app.ui.components
+package com.gallerysync.app.ui.components
 
 import android.net.http.SslCertificate.restoreState
 import android.net.http.SslCertificate.saveState
@@ -85,9 +85,6 @@ fun BottomToolbarFAB(
     val isUploading by viewModel.isUploading.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val workManager = WorkManager.getInstance(context)
-    val backupWorkRequest = OneTimeWorkRequestBuilder<PeriodicPhotoBackupWorker>()
-        .addTag("manual_backup")
-        .build()
 
     val transition = rememberInfiniteTransition(label = "")
     val offsetY by transition.animateFloat(
@@ -157,13 +154,13 @@ fun BottomToolbarFAB(
                         .clip(FloatingToolbarDefaults.ContainerShape)
                         .combinedClickable(
                             onClick = {
-                                scope.launch { tooltipState.show() }
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 if (isUploading) {
                                     try {
                                         workManager.cancelAllWorkByTag("manual_backup")
                                         workManager.cancelAllWorkByTag("instant_upload")
                                         workManager.cancelUniqueWork("InstantPhotoBackupWork")
+                                        workManager.cancelUniqueWork("ScheduledRetryBackupWork")
                                         workManager.cancelUniqueWork(WorkModule.PERIODIC_PHOTO_BACKUP_WORK)
                                         
                                         val isAutoBackupEnabled = Preferences.getBoolean(Preferences.isAutoBackupEnabledKey, false)
@@ -177,6 +174,15 @@ fun BottomToolbarFAB(
                                         Toast.makeText(context, "Error stopping upload", Toast.LENGTH_SHORT).show()
                                     }
                                 } else {
+                                    if (!Preferences.isTelegramConfigured()) {
+                                        Toast.makeText(context, "Configure Telegram in Settings first", Toast.LENGTH_SHORT).show()
+                                        return@combinedClickable
+                                    }
+                                    val networkStatus = com.gallerysync.app.data.upload.SyncNetworkPolicy.evaluateNetwork(context, isManual = true)
+                                    if (!networkStatus.isEligible) {
+                                        val desc = com.gallerysync.app.data.upload.SyncNetworkPolicy.getNetworkStatusDescription(context, isManual = true)
+                                        Toast.makeText(context, "Waiting for network: $desc", Toast.LENGTH_LONG).show()
+                                    }
                                     try {
                                         WorkModule.PeriodicBackup.enqueue(type = "manual_backup")
                                         Toast.makeText(context, "Backup started", Toast.LENGTH_SHORT).show()

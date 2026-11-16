@@ -164,7 +164,7 @@ fun ManageUploadsScreen(
     val pagerState = rememberPagerState(pageCount = { tabs.size })
 
     // Derived lists
-    val cancelledUploads by remember { mutableStateOf(allUploads.filter { it.status == UploadStatus.Cancelled }) }
+    val cancelledUploads = remember(allUploads) { allUploads.filter { it.status == UploadStatus.Cancelled } }
 
     // Stats
     val activeCount = allUploads.count { it.status == UploadStatus.InProgress }

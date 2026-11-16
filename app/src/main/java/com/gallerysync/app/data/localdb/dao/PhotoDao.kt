@@ -101,6 +101,12 @@ interface PhotoDao {
     @Query("SELECT * FROM photos WHERE uploadStatus IN ('NONE', 'FAILED', 'UPLOADING') AND remoteId IS NULL ORDER BY lastUploadAttempt DESC")
     fun getPendingUploadFlow(): Flow<List<Photo>>
 
+    @Query("SELECT * FROM photos WHERE remoteId IS NOT NULL")
+    fun getAllUploadedFlow(): Flow<List<Photo>>
+
+    @Query("SELECT * FROM photos WHERE uploadStatus = 'HOLDING' AND remoteId IS NULL LIMIT :limit")
+    fun getHoldingPreviewFlow(limit: Int = 50): Flow<List<Photo>>
+
     @Query("SELECT * FROM photos WHERE uploadStatus = 'HOLDING' AND remoteId IS NULL")
     suspend fun getAllHolding(): List<Photo>
 

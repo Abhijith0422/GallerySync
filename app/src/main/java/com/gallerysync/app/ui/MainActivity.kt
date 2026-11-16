@@ -39,10 +39,14 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
-    private var startDestination by mutableStateOf(ScreenFlow.Onboarding.route)
-
     private fun hasMediaAccess(): Boolean =
         com.gallerysync.app.utils.PermissionManager.hasAnyMediaAccess(this)
+
+    private fun getInitialStartDestination(): String = when {
+        Preferences.getEncryptedLong(Preferences.channelId, 0L) == 0L -> ScreenFlow.Onboarding.route
+        !hasMediaAccess() -> ScreenFlow.Permission.route
+        else -> ScreenFlow.Main.route
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -64,6 +68,8 @@ class MainActivity : ComponentActivity() {
 
         // Start daily database backup
         WorkModule.DailyDatabaseBackup.enqueuePeriodic()
+
+        val startDestination = getInitialStartDestination()
 
         setContent {
             AppTheme {
@@ -143,11 +149,6 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         if (hasMediaAccess() && mediaStoreObserver == null) {
             registerMediaStoreObserver()
-        }
-        startDestination = when {
-            Preferences.getEncryptedLong(Preferences.channelId, 0) == 0L -> ScreenFlow.Onboarding.route
-            !hasMediaAccess() -> ScreenFlow.Permission.route
-            else -> ScreenFlow.Main.route
         }
     }
 

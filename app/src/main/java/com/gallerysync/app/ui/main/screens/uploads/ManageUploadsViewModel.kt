@@ -129,7 +129,7 @@ enum class UploadStatus {
     Cancelled
 }
 
-class ManageUploadsViewModel(
+class ManageUploadsViewModel @JvmOverloads constructor(
     application: Application,
     coroutineScope: kotlinx.coroutines.CoroutineScope? = null
 ) : AndroidViewModel(application) {

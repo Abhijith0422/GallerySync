@@ -73,6 +73,14 @@ object WorkModule {
                         )
                         .setConstraints(constraints)
                         .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                        .setBackoffCriteria(
+                            backoffPolicy = BackoffPolicy.LINEAR,
+                            duration = Duration.ofSeconds(30)
+                        )
+                        .addTag("manual_backup")
+                        .apply {
+                            if (type != null) addTag(type)
+                        }
                         .build()
 
                 mgr.enqueueUniqueWork(

@@ -13,6 +13,7 @@
 
     <application
         android:name=".App"
+        android:largeHeap="true"
         android:enableOnBackInvokedCallback="true"
         android:windowIsTranslucent="false"
         android:allowBackup="true"

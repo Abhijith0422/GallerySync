@@ -50,8 +50,15 @@ class PeriodicPhotoBackupWorker(
                 return Result.failure()
             }
 
-            // 1. Recover any abandoned IN_PROGRESS records from dead workers / previous sessions
-            UploadQueueRepository.recoverStaleUploads()
+            // Elevate worker to Foreground Service so Android 15 does not throttle or kill it
+            try {
+                setForeground(getForegroundInfo())
+            } catch (e: Exception) {
+                Log.w("PeriodicBackup", "Failed to set foreground info: ${e.message}")
+            }
+
+            // 1. Recover any abandoned IN_PROGRESS records from dead workers / previous sessions immediately
+            UploadQueueRepository.recoverStaleUploads(staleThresholdMs = 0L)
 
             val uploadType = params.inputData.getString(KEY_UPLOAD_TYPE) ?: "periodic"
             val isManual = uploadType == "manual_backup"
@@ -125,6 +132,25 @@ class PeriodicPhotoBackupWorker(
                         }
 
                         val queueItem = UploadQueueRepository.claimNextItem(workerToken) ?: break
+
+                        val currentIdx = successCount + failedCount + 1
+                        val totalCount = pendingPhotos.size
+                        try {
+                            val notifMsg = if (totalCount > 0) {
+                                appContext.getString(R.string.backing_up_photos) + " ($currentIdx/$totalCount)"
+                            } else {
+                                appContext.getString(R.string.backing_up_photos)
+                            }
+                            setForeground(
+                                createForegroundInfo(
+                                    appContext,
+                                    WorkModule.NOTIFICATION_ID_BACKUP,
+                                    notifMsg
+                                )
+                            )
+                        } catch (e: Exception) {
+                            Log.w("PeriodicBackup", "Failed updating foreground progress: ${e.message}")
+                        }
 
                         setProgress(
                             workDataOf(
