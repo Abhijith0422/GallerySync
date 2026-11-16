@@ -5,6 +5,9 @@ import android.net.Uri
 import android.util.Log
 import com.gallerysync.app.R
 import com.gallerysync.app.api.BotApi
+import com.gallerysync.app.api.TelegramChunkApi
+import com.gallerysync.app.data.catalog.models.ManifestReference
+import com.gallerysync.app.data.localdb.entities.BackupCatalogEntity
 import com.gallerysync.app.data.localdb.DbHolder
 import com.gallerysync.app.data.localdb.Preferences
 import com.gallerysync.app.utils.toastFromMainThread
@@ -58,13 +61,36 @@ object BackupHelper {
                 )
             }
 
+            val catalogEntity = if (channelId != 0L) {
+                DbHolder.database.backupCatalogDao().getByChannelId(channelId)
+            } else null
+
+            val chunkedBackups = DbHolder.database.chunkedBackupDao().getAll()
+            val manifests = chunkedBackups.filter { !it.manifestFileId.isNullOrBlank() }.map { cb ->
+                ManifestReference(
+                    backupId = cb.backupId,
+                    fileId = cb.manifestFileId!!,
+                    messageId = cb.manifestMessageId ?: 0L,
+                    fileName = "gallerysync_manifest_${cb.backupId}.json",
+                    sizeBytes = cb.fileSize,
+                    sha256 = cb.fileSha256 ?: "",
+                    mediaSha256 = cb.fileSha256 ?: "",
+                    displayName = cb.fileName
+                )
+            }
+
             val backupFile = BackupFile(
-                version = 3,
+                version = 4,
                 deviceId = deviceId,
                 deviceName = deviceName,
                 createdAt = System.currentTimeMillis(),
                 channelId = channelId.takeIf { it != 0L },
                 botUsername = botUsername.takeIf { it.isNotBlank() },
+                catalogGeneration = catalogEntity?.lastConfirmedGeneration,
+                masterIndexFileId = catalogEntity?.indexFileId,
+                masterIndexSha256 = catalogEntity?.indexSha256,
+                pinnedMessageId = catalogEntity?.pinnedMessageId,
+                manifests = manifests,
                 photos = photos,
                 remotePhotos = remotePhotos,
                 mediaRecords = mediaRecords
@@ -159,6 +185,23 @@ object BackupHelper {
                 // Reconcile unverified/holding local photos with imported remote evidence
                 val reconciledCount = com.gallerysync.app.data.localdb.recovery.InstallRecoveryManager.reconcileLocalPhotosWithRemoteHistory(context)
                 Log.i(TAG, "Reconciled $reconciledCount local media items with imported backup metadata.")
+
+                // Restore catalog state if present in backup
+                if (backupFile.catalogGeneration != null && backupFile.masterIndexFileId != null && backupFile.channelId != null) {
+                    val botToken = Preferences.getEncryptedString(Preferences.botToken, "")
+                    val catalogEntity = BackupCatalogEntity(
+                        channelId = backupFile.channelId,
+                        botId = TelegramChunkApi.extractBotId(botToken),
+                        lastConfirmedGeneration = backupFile.catalogGeneration,
+                        pinnedMessageId = backupFile.pinnedMessageId ?: 0L,
+                        indexFileId = backupFile.masterIndexFileId,
+                        indexSha256 = backupFile.masterIndexSha256 ?: "",
+                        updatedAt = backupFile.createdAt,
+                        syncStatus = "COMMITTED"
+                    )
+                    DbHolder.database.backupCatalogDao().insertOrUpdate(catalogEntity)
+                    Log.i(TAG, "Restored catalog state: Generation ${backupFile.catalogGeneration}, indexFileId=${backupFile.masterIndexFileId}")
+                }
             }
             context.toastFromMainThread(context.getString(R.string.import_successful))
         } catch (e: Exception) {
@@ -206,13 +249,36 @@ object BackupHelper {
                     )
                 }
 
+                val catalogEntity = if (channelId != 0L) {
+                    DbHolder.database.backupCatalogDao().getByChannelId(channelId)
+                } else null
+
+                val chunkedBackups = DbHolder.database.chunkedBackupDao().getAll()
+                val manifests = chunkedBackups.filter { !it.manifestFileId.isNullOrBlank() }.map { cb ->
+                    ManifestReference(
+                        backupId = cb.backupId,
+                        fileId = cb.manifestFileId!!,
+                        messageId = cb.manifestMessageId ?: 0L,
+                        fileName = "gallerysync_manifest_${cb.backupId}.json",
+                        sizeBytes = cb.fileSize,
+                        sha256 = cb.fileSha256 ?: "",
+                        mediaSha256 = cb.fileSha256 ?: "",
+                        displayName = cb.fileName
+                    )
+                }
+
                 val backupFile = BackupFile(
-                    version = 3,
+                    version = 4,
                     deviceId = deviceId,
                     deviceName = deviceName,
                     createdAt = System.currentTimeMillis(),
                     channelId = channelId.takeIf { it != 0L },
                     botUsername = botUsername.takeIf { it.isNotBlank() },
+                    catalogGeneration = catalogEntity?.lastConfirmedGeneration,
+                    masterIndexFileId = catalogEntity?.indexFileId,
+                    masterIndexSha256 = catalogEntity?.indexSha256,
+                    pinnedMessageId = catalogEntity?.pinnedMessageId,
+                    manifests = manifests,
                     photos = photos,
                     remotePhotos = remotePhotos,
                     mediaRecords = mediaRecords

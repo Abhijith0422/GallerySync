@@ -60,14 +60,15 @@ class Migration10to11Test {
             .addMigrations(
                 com.gallerysync.app.data.localdb.migration.Migration10to11_VideoSupport(),
                 com.gallerysync.app.data.localdb.migration.Migration11to12_UploadQueueUnique(),
-                com.gallerysync.app.data.localdb.migration.Migration12to13_ChunkedBackup()
+                com.gallerysync.app.data.localdb.migration.Migration12to13_ChunkedBackup(),
+                com.gallerysync.app.data.localdb.migration.Migration13to14_BackupCatalog()
             )
             .build()
 
         try {
             // Force database opening, migration execution, and Room schema validation
             val writableDb = roomDb.openHelper.writableDatabase
-            assertEquals(13, writableDb.version)
+            assertEquals(14, writableDb.version)
 
             // Step 3: Verify record counts
             val photoDao = roomDb.photoDao()

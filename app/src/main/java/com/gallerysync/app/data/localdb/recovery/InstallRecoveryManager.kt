@@ -3,15 +3,42 @@ package com.gallerysync.app.data.localdb.recovery
 import android.content.Context
 import android.util.Log
 import androidx.core.net.toUri
+import com.fasterxml.jackson.databind.DeserializationFeature
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.gallerysync.app.api.TelegramCatalogApi
+import com.gallerysync.app.api.TelegramCatalogResult
+import com.gallerysync.app.api.TelegramChunkApi
+import com.gallerysync.app.data.catalog.MasterIndexManager
+import com.gallerysync.app.data.catalog.models.BackupManifest
+import com.gallerysync.app.data.catalog.models.MasterIndex
 import com.gallerysync.app.data.localdb.DbHolder
 import com.gallerysync.app.data.localdb.Preferences
 import com.gallerysync.app.data.localdb.WhDatabase
+import com.gallerysync.app.data.localdb.entities.BackupCatalogEntity
+import com.gallerysync.app.data.localdb.entities.ChunkedBackup
+import com.gallerysync.app.data.localdb.entities.ChunkedBackupStatus
 import com.gallerysync.app.data.localdb.entities.Photo
 import com.gallerysync.app.data.localdb.entities.RemotePhoto
 import com.gallerysync.app.data.localdb.entities.SyncMetadata
+import com.gallerysync.app.data.localdb.entities.VideoChunk
+import com.gallerysync.app.data.localdb.entities.VideoChunkStatus
 import com.gallerysync.app.utils.ContentHasher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+sealed class TelegramCatalogRecoveryResult {
+    data class Success(
+        val generation: Long,
+        val totalMediaCount: Int,
+        val manifestsRecovered: Int,
+        val mediaRecordsRecovered: Int,
+        val localReconciledCount: Int
+    ) : TelegramCatalogRecoveryResult()
+
+    object NoCatalogFound : TelegramCatalogRecoveryResult()
+    data class IdentityMismatch(val reason: String) : TelegramCatalogRecoveryResult()
+    data class Error(val message: String, val cause: Throwable? = null) : TelegramCatalogRecoveryResult()
+}
 
 /**
  * Manages reinstallation recovery and prevents duplicate uploads by enforcing
@@ -174,5 +201,205 @@ object InstallRecoveryManager {
 
         Log.i(TAG, "Reconciliation finished: $matchedCount local media items reconciled with remote records.")
         matchedCount
+    }
+
+    /**
+     * Recovers backup catalog metadata directly from the pinned Telegram Master Index.
+     * Reconstructs RemotePhoto records, ChunkedBackup manifests, chunks, and reconciles
+     * local MediaStore photos without downloading original media chunks.
+     */
+    suspend fun recoverCatalogFromTelegram(
+        context: Context,
+        botToken: String,
+        channelId: Long,
+        database: WhDatabase = DbHolder.database,
+        catalogApi: TelegramCatalogApi = TelegramCatalogApi.defaultInstance,
+        indexManager: MasterIndexManager = MasterIndexManager.defaultInstance
+    ): TelegramCatalogRecoveryResult = withContext(Dispatchers.IO) {
+        val botId = TelegramChunkApi.extractBotId(botToken)
+        if (botId <= 0L) {
+            return@withContext TelegramCatalogRecoveryResult.Error("Invalid botToken format")
+        }
+
+        // 1. Query Telegram channel getChat for pinned message
+        val chatInfoResult = catalogApi.getChatInfo(botToken, channelId)
+        val chatInfo = when (chatInfoResult) {
+            is TelegramCatalogResult.Success -> chatInfoResult.value
+            is TelegramCatalogResult.RateLimited -> return@withContext TelegramCatalogRecoveryResult.Error("Rate limited by Telegram (${chatInfoResult.retryAfterSeconds}s)")
+            is TelegramCatalogResult.Unauthorized -> return@withContext TelegramCatalogRecoveryResult.Error("Unauthorized bot credentials")
+            is TelegramCatalogResult.PermissionDenied -> return@withContext TelegramCatalogRecoveryResult.Error("Bot lacks permissions in channel $channelId")
+            else -> return@withContext TelegramCatalogRecoveryResult.Error("Failed to fetch chat info: ${(chatInfoResult as? TelegramCatalogResult.InvalidResponse)?.reason}")
+        }
+
+        val pinnedMsg = chatInfo.pinnedMessage
+            ?: return@withContext TelegramCatalogRecoveryResult.NoCatalogFound
+        val doc = pinnedMsg.document
+            ?: return@withContext TelegramCatalogRecoveryResult.NoCatalogFound
+
+        val fileName = doc.fileName ?: ""
+        if (!fileName.contains("master_index", ignoreCase = true)) {
+            Log.w(TAG, "Pinned document $fileName is not a GallerySync master index")
+            return@withContext TelegramCatalogRecoveryResult.NoCatalogFound
+        }
+
+        // 2. Download master index JSON bytes
+        val indexBytesResult = catalogApi.downloadFileByFileId(botToken, doc.fileId)
+        val indexBytes = when (indexBytesResult) {
+            is TelegramCatalogResult.Success -> indexBytesResult.value
+            else -> return@withContext TelegramCatalogRecoveryResult.Error("Failed to download master index file: ${doc.fileId}")
+        }
+
+        val mapper = ObjectMapper().apply { configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false) }
+        val masterIndex = try {
+            val idx = mapper.readValue(indexBytes, MasterIndex::class.java)
+            idx.validate()
+            idx
+        } catch (e: Exception) {
+            return@withContext TelegramCatalogRecoveryResult.Error("Malformed master index JSON: ${e.message}", e)
+        }
+
+        // 3. Validate channel and bot identities
+        if (masterIndex.channelId != channelId) {
+            return@withContext TelegramCatalogRecoveryResult.IdentityMismatch(
+                "Master index channel ID (${masterIndex.channelId}) does not match target channel ($channelId)"
+            )
+        }
+        if (masterIndex.botId != botId) {
+            return@withContext TelegramCatalogRecoveryResult.IdentityMismatch(
+                "Master index bot ID (${masterIndex.botId}) does not match current bot ID ($botId)"
+            )
+        }
+
+        Log.i(TAG, "Recovering catalog from Telegram: Generation ${masterIndex.generation}, ${masterIndex.totalMediaCount} media items, ${masterIndex.totalManifestCount} manifests")
+
+        val remotePhotoDao = database.remotePhotoDao()
+        val chunkedBackupDao = database.chunkedBackupDao()
+        val videoChunkDao = database.videoChunkDao()
+        val catalogDao = database.backupCatalogDao()
+
+        // 4. Download and recover chunked backup manifests
+        var manifestsRecovered = 0
+        for (manifestRef in masterIndex.manifests) {
+            try {
+                val manifestBytes = catalogApi.downloadFileByFileId(botToken, manifestRef.fileId).getOrNull()
+                if (manifestBytes != null) {
+                    val manifest = mapper.readValue(manifestBytes, BackupManifest::class.java)
+                    manifest.validate()
+
+                    val chunkedBackup = ChunkedBackup(
+                        backupId = manifest.backupId,
+                        localId = manifest.backupId,
+                        pathUri = "",
+                        fileName = manifest.media.originalName,
+                        fileSize = manifest.media.sizeBytes,
+                        mimeType = manifest.media.mimeType,
+                        width = manifest.media.width,
+                        height = manifest.media.height,
+                        duration = manifest.media.durationMs,
+                        fileSha256 = manifest.media.sha256,
+                        chunkSize = manifest.chunkConfiguration.chunkSizeBytes,
+                        totalChunks = manifest.chunkConfiguration.totalChunks,
+                        completedChunks = manifest.chunks.size,
+                        status = ChunkedBackupStatus.DONE,
+                        channelId = manifest.destination.chatId,
+                        topicId = manifest.destination.topicId,
+                        botId = manifest.bot.id,
+                        botUsername = manifest.bot.username,
+                        manifestFileId = manifestRef.fileId,
+                        manifestMessageId = manifestRef.messageId,
+                        createdAt = manifest.createdAt,
+                        completedAt = manifest.createdAt
+                    )
+                    chunkedBackupDao.insertOrReplace(chunkedBackup)
+
+                    val chunks = manifest.chunks.map { c ->
+                        VideoChunk(
+                            backupId = manifest.backupId,
+                            chunkIndex = c.index,
+                            startOffset = c.startOffset,
+                            endOffset = c.endOffsetExclusive,
+                            chunkSize = c.sizeBytes,
+                            chunkSha256 = c.sha256,
+                            status = VideoChunkStatus.DONE,
+                            telegramFileId = c.telegramFileId,
+                            telegramMessageId = c.telegramMessageId,
+                            uploadedAt = manifest.createdAt
+                        )
+                    }
+                    videoChunkDao.insertAll(chunks)
+
+                    // Also register in remote_photos for cross-referencing
+                    val remote = RemotePhoto(
+                        remoteId = manifestRef.fileId,
+                        photoType = "mp4",
+                        fileName = manifest.media.originalName,
+                        fileSize = manifest.media.sizeBytes,
+                        uploadedAt = manifest.createdAt,
+                        thumbnailCached = false,
+                        localId = manifest.backupId,
+                        messageId = manifestRef.messageId,
+                        contentHash = manifest.media.sha256,
+                        mediaType = "VIDEO",
+                        status = "ACTIVE"
+                    )
+                    remotePhotoDao.insertAllIfNotExists(remote)
+                    manifestsRecovered++
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to recover manifest ${manifestRef.backupId}: ${e.message}", e)
+            }
+        }
+
+        // 5. Download and recover media records (root active records + shards)
+        val allMediaRecords = indexManager.fetchAllRecords(botToken, masterIndex)
+        val remotePhotosToInsert = allMediaRecords.map { rec ->
+            RemotePhoto(
+                remoteId = rec.telegramFileId,
+                photoType = rec.displayName?.substringAfterLast('.', "")?.ifEmpty { if (rec.mediaType == "VIDEO") "mp4" else "jpg" } ?: "jpg",
+                fileName = rec.displayName ?: "media_${rec.telegramFileId}",
+                fileSize = rec.sizeBytes,
+                uploadedAt = rec.backupTimestamp,
+                thumbnailCached = false,
+                localId = rec.localId,
+                messageId = rec.telegramMessageId,
+                contentHash = rec.mediaSha256.takeIf { it.isNotBlank() },
+                mediaType = rec.mediaType,
+                status = if (rec.backupStatus == "DELETED") "DELETED" else "ACTIVE"
+            )
+        }
+
+        if (remotePhotosToInsert.isNotEmpty()) {
+            remotePhotoDao.insertAllIfNotExists(*remotePhotosToInsert.toTypedArray())
+            Log.i(TAG, "Recovered ${remotePhotosToInsert.size} RemotePhoto records from catalog.")
+        }
+
+        // 6. Record confirmed generation in backup_catalog
+        val catalogEntity = BackupCatalogEntity(
+            channelId = channelId,
+            botId = botId,
+            lastConfirmedGeneration = masterIndex.generation,
+            pinnedMessageId = pinnedMsg.messageId,
+            indexFileId = doc.fileId,
+            indexSha256 = ContentHasher.computeHash(indexBytes),
+            updatedAt = masterIndex.updatedAt,
+            syncStatus = "COMMITTED"
+        )
+        catalogDao.insertOrUpdate(catalogEntity)
+
+        // 7. Mark baseline completed since valid historical records were recovered
+        markBaselineCompleted(database, remotePhotosToInsert.size + manifestsRecovered)
+
+        // 8. Reconcile local photos with recovered remote history
+        val localReconciled = reconcileLocalPhotosWithRemoteHistory(context, database)
+
+        Log.i(TAG, "Catalog recovery complete: Generation ${masterIndex.generation}, $manifestsRecovered manifests, ${remotePhotosToInsert.size} media records recovered, $localReconciled local files reconciled.")
+
+        TelegramCatalogRecoveryResult.Success(
+            generation = masterIndex.generation,
+            totalMediaCount = masterIndex.totalMediaCount,
+            manifestsRecovered = manifestsRecovered,
+            mediaRecordsRecovered = remotePhotosToInsert.size,
+            localReconciledCount = localReconciled
+        )
     }
 }

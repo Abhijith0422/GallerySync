@@ -7,10 +7,13 @@ import android.net.Uri
 import android.util.Log
 import androidx.core.net.toUri
 import com.gallerysync.app.api.BotApi
+import com.gallerysync.app.data.catalog.models.CatalogMediaRecord
 import com.gallerysync.app.data.localdb.DbHolder
 import com.gallerysync.app.data.localdb.Preferences
+import com.gallerysync.app.data.localdb.entities.PendingCatalogEntry
 import com.gallerysync.app.data.localdb.entities.Photo
 import com.gallerysync.app.data.localdb.entities.RemotePhoto
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.gallerysync.app.utils.ImageMetadataExtractor
 import com.gallerysync.app.utils.MetadataConfig
 import com.gallerysync.app.utils.NotificationHelper
@@ -442,6 +445,34 @@ object TelegramUploadDispatcher {
         )
         remotePhotoDao.insertAll(remotePhoto)
         Log.i(TAG, "Persisted RemotePhoto: remoteId=$remoteId, mediaType=$mediaType, messageId=${message.messageId}")
+
+        // 3. Queue PendingCatalogEntry for MasterIndex
+        try {
+            val pendingDao = DbHolder.database.pendingCatalogEntryDao()
+            val catalogRecord = CatalogMediaRecord(
+                mediaSha256 = photo.contentHash ?: "",
+                displayName = fileName,
+                sizeBytes = fileSize,
+                mediaType = mediaType,
+                telegramFileId = remoteId,
+                telegramMessageId = message.messageId.toLong(),
+                backupTimestamp = System.currentTimeMillis(),
+                backupStatus = "DONE",
+                localId = photo.localId
+            )
+            val json = ObjectMapper().writeValueAsString(catalogRecord)
+            val entry = PendingCatalogEntry(
+                entryType = PendingCatalogEntry.TYPE_MEDIA_RECORD,
+                referenceId = if (!photo.contentHash.isNullOrBlank()) photo.contentHash!! else remoteId,
+                payloadJson = json,
+                createdAt = System.currentTimeMillis(),
+                status = PendingCatalogEntry.STATUS_PENDING
+            )
+            pendingDao.insertOrReplace(entry)
+            Log.d(TAG, "Enqueued PendingCatalogEntry for $remoteId (hash=${photo.contentHash})")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to enqueue PendingCatalogEntry for $remoteId: ${e.message}", e)
+        }
     }
 
     private suspend fun buildCaption(context: Context, photo: Photo, uri: Uri): String {

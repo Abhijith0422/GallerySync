@@ -27,9 +27,14 @@ import com.gallerysync.app.data.localdb.migration.Migration4to5_DeletedPhotos
 import com.gallerysync.app.data.localdb.migration.Migration7to8_MultiDevice
 import com.gallerysync.app.data.localdb.migration.Migration8to9_PreviewRemoteId
 import com.gallerysync.app.data.localdb.migration.Migration9to10_ForumTopics
+import com.gallerysync.app.data.localdb.dao.BackupCatalogDao
+import com.gallerysync.app.data.localdb.dao.PendingCatalogEntryDao
+import com.gallerysync.app.data.localdb.entities.BackupCatalogEntity
+import com.gallerysync.app.data.localdb.entities.PendingCatalogEntry
 import com.gallerysync.app.data.localdb.migration.Migration10to11_VideoSupport
 import com.gallerysync.app.data.localdb.migration.Migration11to12_UploadQueueUnique
 import com.gallerysync.app.data.localdb.migration.Migration12to13_ChunkedBackup
+import com.gallerysync.app.data.localdb.migration.Migration13to14_BackupCatalog
 
 @Database(
     entities = [
@@ -39,9 +44,11 @@ import com.gallerysync.app.data.localdb.migration.Migration12to13_ChunkedBackup
         UploadQueue::class,
         SyncMetadata::class,
         ChunkedBackup::class,
-        VideoChunk::class
+        VideoChunk::class,
+        BackupCatalogEntity::class,
+        PendingCatalogEntry::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = false
 )
 @TypeConverters(ChunkConverters::class)
@@ -54,6 +61,8 @@ abstract class WhDatabase : RoomDatabase() {
     abstract fun syncMetadataDao(): SyncMetadataDao
     abstract fun chunkedBackupDao(): ChunkedBackupDao
     abstract fun videoChunkDao(): VideoChunkDao
+    abstract fun backupCatalogDao(): BackupCatalogDao
+    abstract fun pendingCatalogEntryDao(): PendingCatalogEntryDao
 
     companion object {
         private const val DATABASE_NAME = "wh_database"
@@ -80,7 +89,8 @@ abstract class WhDatabase : RoomDatabase() {
                         Migration9to10_ForumTopics(),
                         Migration10to11_VideoSupport(),
                         Migration11to12_UploadQueueUnique(),
-                        Migration12to13_ChunkedBackup()
+                        Migration12to13_ChunkedBackup(),
+                        Migration13to14_BackupCatalog()
                     )
                     .build()
                 INSTANCE = instance

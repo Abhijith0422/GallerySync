@@ -39,6 +39,7 @@ class PeriodicPhotoBackupWorker(
 ) : CoroutineWorker(appContext, params) {
 
     private val channelId: Long = Preferences.getEncryptedLong(Preferences.channelId, 0L)
+    private val botToken: String get() = Preferences.getEncryptedString(Preferences.botToken, "")
     private val botApi: BotApi = BotApi
     private val workerToken = UUID.randomUUID().toString()
 
@@ -144,6 +145,21 @@ class PeriodicPhotoBackupWorker(
                     }
 
                     Log.d("PeriodicBackup", "Queue processing cycle complete: $successCount succeeded, $failedCount failed")
+
+                    // Commit any pending catalog entries to the Telegram Master Index
+                    try {
+                        val pendingCount = DbHolder.database.pendingCatalogEntryDao().getPendingCount()
+                        if (pendingCount > 0 && botToken.isNotBlank() && channelId != 0L) {
+                            Log.i("PeriodicBackup", "Committing $pendingCount pending catalog entries to Telegram Master Index...")
+                            com.gallerysync.app.data.catalog.MasterIndexManager.defaultInstance.commitPendingEntries(
+                                context = appContext,
+                                botToken = botToken,
+                                channelId = channelId
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Log.e("PeriodicBackup", "Failed to commit master index at end of batch: ${e.message}", e)
+                    }
 
                     // Schedule delayed execution if any items are in RETRY_WAIT
                     val earliestRetry = UploadQueueRepository.getEarliestScheduledRetry()
@@ -299,13 +315,45 @@ class PeriodicPhotoBackupWorker(
                 return@coroutineScope when (chunkResult) {
                     is com.gallerysync.app.data.upload.ChunkedUploadResult.Success -> {
                         if (chunkResult.isAllChunksUploaded) {
-                            Log.i("PeriodicBackup", "All ${chunkResult.totalChunks} chunks uploaded for ${chunkResult.backupId}. Awaiting Phase 10.4 manifest.")
-                            UploadQueueRepository.recordSuccess(
-                                queueId = queueItem.id,
-                                localId = queueItem.localId,
-                                remoteId = "CHUNKED_${chunkResult.backupId}"
+                            Log.i("PeriodicBackup", "All ${chunkResult.totalChunks} chunks uploaded for ${chunkResult.backupId}. Generating and uploading manifest...")
+                            val manifestRes = com.gallerysync.app.data.catalog.BackupManifestManager.defaultInstance.createAndUploadManifest(
+                                context = appContext,
+                                backupId = chunkResult.backupId,
+                                botToken = botToken
                             )
-                            true
+                            when (manifestRes) {
+                                is com.gallerysync.app.data.catalog.ManifestUploadResult.Success -> {
+                                    Log.i("PeriodicBackup", "Manifest uploaded for ${chunkResult.backupId} (fileId=${manifestRes.manifestReference.fileId}). Recording success.")
+                                    UploadQueueRepository.recordSuccess(
+                                        queueId = queueItem.id,
+                                        localId = queueItem.localId,
+                                        remoteId = "CHUNKED_${chunkResult.backupId}",
+                                        messageId = manifestRes.manifestReference.messageId
+                                    )
+                                    // Commit to Master Index
+                                    com.gallerysync.app.data.catalog.MasterIndexManager.defaultInstance.commitPendingEntries(
+                                        context = appContext,
+                                        botToken = botToken,
+                                        channelId = channelId
+                                    )
+                                    true
+                                }
+                                is com.gallerysync.app.data.catalog.ManifestUploadResult.RateLimited -> {
+                                    val err = TelegramUploadDispatcher.UploadError.RateLimited(manifestRes.retryAfterSeconds)
+                                    UploadQueueRepository.recordFailure(queueItem.id, queueItem.localId, err)
+                                    false
+                                }
+                                is com.gallerysync.app.data.catalog.ManifestUploadResult.Error -> {
+                                    val err = TelegramUploadDispatcher.UploadError.ApiError(0, manifestRes.message, isRetryable = manifestRes.isRetryable)
+                                    UploadQueueRepository.recordFailure(queueItem.id, queueItem.localId, err)
+                                    false
+                                }
+                                is com.gallerysync.app.data.catalog.ManifestUploadResult.NotReady -> {
+                                    Log.w("PeriodicBackup", "Manifest not ready: ${manifestRes.reason}")
+                                    DbHolder.database.uploadQueueDao().resetStaleItem(queueItem.id)
+                                    false
+                                }
+                            }
                         } else {
                             Log.i("PeriodicBackup", "Chunked upload made progress (${chunkResult.completedChunks}/${chunkResult.totalChunks}) but not finished. Releasing claim and scheduling continuation.")
                             DbHolder.database.uploadQueueDao().resetStaleItem(queueItem.id)

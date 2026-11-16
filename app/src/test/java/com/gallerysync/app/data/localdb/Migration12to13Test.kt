@@ -64,14 +64,17 @@ class Migration12to13Test {
             v12Db.close()
         }
 
-        // Step 2: Open with Room using Migration12to13_ChunkedBackup
+        // Step 2: Open with Room using Migration12to13_ChunkedBackup and Migration13to14_BackupCatalog
         val roomDb = Room.databaseBuilder(context, WhDatabase::class.java, dbName)
-            .addMigrations(Migration12to13_ChunkedBackup())
+            .addMigrations(
+                Migration12to13_ChunkedBackup(),
+                com.gallerysync.app.data.localdb.migration.Migration13to14_BackupCatalog()
+            )
             .build()
 
         try {
             val writableDb = roomDb.openHelper.writableDatabase
-            assertEquals("Database version must be upgraded to 13", 13, writableDb.version)
+            assertEquals("Database version must be upgraded to 14", 14, writableDb.version)
 
             val photoDao = roomDb.photoDao()
             val remotePhotoDao = roomDb.remotePhotoDao()
