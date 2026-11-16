@@ -1,4 +1,5 @@
 ﻿package com.gallerysync.app.ui.main
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.text.input.KeyboardType
 import com.gallerysync.app.utils.toastFromMainThread
 import androidx.compose.foundation.text.KeyboardOptions
@@ -681,19 +682,39 @@ fun MainPage(viewModel: MainViewModel = screenScopedViewModel()) {
             )
         }
 
-        AnimatedVisibility(visible = syncState == SyncState.SYNCING && currentRoute == Screens.RemotePhotos.route) {
-            Dialog({}) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+        // Non-blocking sync status indicator: does not intercept touches or block UI usage
+        AnimatedVisibility(
+            visible = syncState == SyncState.SYNCING && currentRoute == Screens.RemotePhotos.route,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 12.dp)
+                .zIndex(100f)
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.95f),
+                shadowElevation = 6.dp,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primaryContainer, strokeCap = StrokeCap.Square)
-                    Spacer(Modifier.size(16.dp))
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(10.dp))
                     Text(
                         text = stringResource(R.string.syncing_your_photos),
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        fontStyle = FontStyle.Italic
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }

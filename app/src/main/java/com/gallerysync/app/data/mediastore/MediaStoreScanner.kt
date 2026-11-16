@@ -269,18 +269,29 @@ object MediaStoreScanner {
         val contentResolver = context.contentResolver
         var prunedCount = 0
 
-        for (photo in notUploaded) {
-            val uri = photo.pathUri.toUri()
-            var exists = false
-            try {
-                contentResolver.openAssetFileDescriptor(uri, "r")?.use {
-                    exists = true
+        // High-performance batch check: query all existing IDs in a single indexed projection query
+        val (selection, selectionArgs) = buildSelection(accessState)
+        val existingIds = HashSet<String>(notUploaded.size)
+        try {
+            contentResolver.query(
+                COLLECTION_URI,
+                arrayOf(MediaStore.MediaColumns._ID),
+                selection,
+                selectionArgs,
+                null
+            )?.use { cursor ->
+                val idIdx = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                while (cursor.moveToNext()) {
+                    existingIds.add(cursor.getLong(idIdx).toString())
                 }
-            } catch (_: Exception) {
-                exists = false
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to query existing MediaStore IDs for pruning", e)
+            return@withContext
+        }
 
-            if (!exists) {
+        for (photo in notUploaded) {
+            if (photo.localId !in existingIds) {
                 Log.d(TAG, "Pruning deleted local file: id=${photo.localId}, uri=${photo.pathUri}")
                 photoDao.deleteById(photo.localId)
                 prunedCount++

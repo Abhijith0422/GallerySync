@@ -38,6 +38,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.navigation.NavController
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -198,7 +201,7 @@ private fun createRemoteLayoutCache(
     )
 }
 
-@OptIn(ExperimentalAnimationApi::class, ExperimentalSharedTransitionApi::class, ExperimentalMaterial3ExpressiveApi::class, kotlinx.coroutines.FlowPreview::class)
+@OptIn(ExperimentalAnimationApi::class, ExperimentalSharedTransitionApi::class, ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class, kotlinx.coroutines.FlowPreview::class)
 @Composable
 fun RemotePhotosGrid(
     cloudPhotos: LazyPagingItems<RemotePhoto>,
@@ -441,7 +444,27 @@ fun RemotePhotosGrid(
                 onAlbumSelected = onTopicAlbumSelected
             )
 
-            Box(modifier = Modifier.fillMaxSize()) {
+            val pullToRefreshState = rememberPullToRefreshState()
+            val isRefreshing = cloudPhotos.loadState.refresh is LoadState.Loading && cloudPhotos.itemCount > 0
+
+            PullToRefreshBox(
+                isRefreshing = isRefreshing,
+                onRefresh = {
+                    if (!selectionMode) {
+                        cloudPhotos.refresh()
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+                state = pullToRefreshState,
+                indicator = {
+                    PullToRefreshDefaults.Indicator(
+                        state = pullToRefreshState,
+                        isRefreshing = isRefreshing,
+                        modifier = Modifier.align(Alignment.TopCenter)
+                    )
+                }
+            ) {
+                Box(modifier = Modifier.fillMaxSize()) {
                 ExpressiveScrollbar(
                     lazyGridState = lazyGridState,
                     totalRows = effectiveTotalRows,
@@ -565,6 +588,7 @@ fun RemotePhotosGrid(
             }
         }
     }
+}
 }
 
 @OptIn(ExperimentalSharedTransitionApi::class)
