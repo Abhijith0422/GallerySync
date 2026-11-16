@@ -39,7 +39,8 @@ import java.io.IOException
 object TelegramUploadDispatcher {
 
     private const val TAG = "UploadDispatcher"
-    const val MAX_TELEGRAM_FILE_SIZE_BYTES = 50L * 1024 * 1024 // 50 MB hosted bot limit
+    const val MAX_TELEGRAM_FILE_SIZE_BYTES = 50L * 1024 * 1024 // 50 MB hosted bot limit for documents/images
+    const val DIRECT_UPLOAD_MAX_BYTES = com.gallerysync.app.data.chunking.ChunkConfiguration.DIRECT_UPLOAD_MAX_BYTES // 16 MiB (16,777,216 bytes) single authoritative threshold for direct videos
 
     enum class UploadDispatchType {
         VIDEO_MP4,
@@ -173,9 +174,10 @@ object TelegramUploadDispatcher {
         val originalFileName = getFileName(contentResolver, uri) ?: "${photo.localId}.$ext"
         val dispatchType = determineDispatchType(photo.mediaType, ext, mimeType)
 
-        // 2. Pre-check: if a video exceeds 50 MB, do not create temp file or attempt upload
-        if (dispatchType != UploadDispatchType.DOCUMENT_IMAGE && rawSourceSize > MAX_TELEGRAM_FILE_SIZE_BYTES) {
-            Log.w(TAG, "Video ${photo.localId} ($rawSourceSize bytes) exceeds 50 MB limit, skipping upload")
+        // 2. Pre-check: if media exceeds authoritative direct upload limit, do not create temp file or attempt upload
+        val maxAllowedPreCheck = if (dispatchType != UploadDispatchType.DOCUMENT_IMAGE) DIRECT_UPLOAD_MAX_BYTES else MAX_TELEGRAM_FILE_SIZE_BYTES
+        if (rawSourceSize > maxAllowedPreCheck) {
+            Log.w(TAG, "Media ${photo.localId} ($rawSourceSize bytes) exceeds direct upload limit ($maxAllowedPreCheck bytes), skipping direct upload")
             throw UploadError.FileExceedsLimit(rawSourceSize)
         }
 
@@ -196,7 +198,8 @@ object TelegramUploadDispatcher {
             var actualFileSize = tempFile.length()
 
             // 4. File-size validation
-            if (actualFileSize > MAX_TELEGRAM_FILE_SIZE_BYTES) {
+            val maxAllowedActualSize = if (dispatchType != UploadDispatchType.DOCUMENT_IMAGE) DIRECT_UPLOAD_MAX_BYTES else MAX_TELEGRAM_FILE_SIZE_BYTES
+            if (actualFileSize > maxAllowedActualSize) {
                 if (dispatchType != UploadDispatchType.DOCUMENT_IMAGE) {
                     // Videos must NEVER be silently compressed
                     throw UploadError.FileExceedsLimit(actualFileSize)

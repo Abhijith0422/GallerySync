@@ -51,10 +51,11 @@ class ChunkedUploadEngine(
 
     /**
      * Determines whether a photo/video requires chunked backup.
+     * Enforces the single authoritative threshold: videos > 16 MiB (16,777,216 bytes) must be chunked.
      */
     fun requiresChunkedBackup(mediaType: String, fileSize: Long): Boolean {
         val isVideo = mediaType == "VIDEO"
-        return isVideo && fileSize > TelegramUploadDispatcher.MAX_TELEGRAM_FILE_SIZE_BYTES
+        return isVideo && fileSize > ChunkConfiguration.DIRECT_UPLOAD_MAX_BYTES
     }
 
     /**

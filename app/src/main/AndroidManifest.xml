@@ -63,6 +63,7 @@
             <intent-filter>
                 <action android:name="com.gallerysync.app.VALIDATE_RESTORATION" />
                 <action android:name="com.gallerysync.app.VALIDATE_10_5_1_AUDIT" />
+                <action android:name="com.gallerysync.app.VALIDATE_10_6_E2E" />
             </intent-filter>
         </receiver>
     </application>

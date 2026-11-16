@@ -19,6 +19,7 @@ data class ChunkConfiguration(
     }
 
     companion object {
+        const val DIRECT_UPLOAD_MAX_BYTES = 16_777_216L // 16 MiB = 16,777,216 bytes (Authoritative maximum for direct video upload)
         const val DEFAULT_CHUNK_SIZE = 16 * 1024 * 1024L // 16 MiB = 16,777,216 bytes
         const val MIN_CHUNK_SIZE = 1 * 1024 * 1024L      // 1 MiB = 1,048,576 bytes
         const val MAX_CHUNK_SIZE = 20_000_000L           // 20 MB = 20,000,000 bytes (Telegram getFile limit)

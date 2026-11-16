@@ -296,10 +296,10 @@ class PeriodicPhotoBackupWorker(
                 }
             }
 
-            // 6. Check if media requires chunked upload (e.g. video > 50 MB or active chunked backup)
+            // 6. Check if media requires chunked upload (e.g. video > 16 MiB or active chunked backup)
             val rawSourceSize = TelegramUploadDispatcher.getSourceFileSize(appContext, uri)
-            val isChunkedVideo = queueItem.mediaType == "VIDEO" && (
-                rawSourceSize > TelegramUploadDispatcher.MAX_TELEGRAM_FILE_SIZE_BYTES ||
+            val isChunkedVideo = (queueItem.mediaType == "VIDEO" || current.mediaType == "VIDEO" || current.photoType in listOf("mp4", "mkv", "mov", "webm", "3gp", "avi", "flv")) && (
+                rawSourceSize > com.gallerysync.app.data.chunking.ChunkConfiguration.DIRECT_UPLOAD_MAX_BYTES ||
                 com.gallerysync.app.data.upload.ChunkedBackupRepository.getBackupByLocalId(queueItem.localId) != null
             )
 
