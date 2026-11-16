@@ -29,12 +29,15 @@ import com.gallerysync.app.data.localdb.migration.Migration8to9_PreviewRemoteId
 import com.gallerysync.app.data.localdb.migration.Migration9to10_ForumTopics
 import com.gallerysync.app.data.localdb.dao.BackupCatalogDao
 import com.gallerysync.app.data.localdb.dao.PendingCatalogEntryDao
+import com.gallerysync.app.data.localdb.dao.VideoRestorationDao
 import com.gallerysync.app.data.localdb.entities.BackupCatalogEntity
 import com.gallerysync.app.data.localdb.entities.PendingCatalogEntry
+import com.gallerysync.app.data.localdb.entities.VideoRestorationJob
 import com.gallerysync.app.data.localdb.migration.Migration10to11_VideoSupport
 import com.gallerysync.app.data.localdb.migration.Migration11to12_UploadQueueUnique
 import com.gallerysync.app.data.localdb.migration.Migration12to13_ChunkedBackup
 import com.gallerysync.app.data.localdb.migration.Migration13to14_BackupCatalog
+import com.gallerysync.app.data.localdb.migration.Migration14to15_VideoRestoration
 
 @Database(
     entities = [
@@ -46,9 +49,10 @@ import com.gallerysync.app.data.localdb.migration.Migration13to14_BackupCatalog
         ChunkedBackup::class,
         VideoChunk::class,
         BackupCatalogEntity::class,
-        PendingCatalogEntry::class
+        PendingCatalogEntry::class,
+        VideoRestorationJob::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = false
 )
 @TypeConverters(ChunkConverters::class)
@@ -63,6 +67,7 @@ abstract class WhDatabase : RoomDatabase() {
     abstract fun videoChunkDao(): VideoChunkDao
     abstract fun backupCatalogDao(): BackupCatalogDao
     abstract fun pendingCatalogEntryDao(): PendingCatalogEntryDao
+    abstract fun videoRestorationDao(): VideoRestorationDao
 
     companion object {
         private const val DATABASE_NAME = "wh_database"
@@ -90,7 +95,8 @@ abstract class WhDatabase : RoomDatabase() {
                         Migration10to11_VideoSupport(),
                         Migration11to12_UploadQueueUnique(),
                         Migration12to13_ChunkedBackup(),
-                        Migration13to14_BackupCatalog()
+                        Migration13to14_BackupCatalog(),
+                        Migration14to15_VideoRestoration()
                     )
                     .build()
                 INSTANCE = instance

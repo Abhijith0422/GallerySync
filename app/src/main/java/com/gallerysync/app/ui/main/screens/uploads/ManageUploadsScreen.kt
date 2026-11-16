@@ -43,9 +43,12 @@ import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.CloudQueue
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.HourglassTop
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
@@ -55,11 +58,20 @@ import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.DeleteOutline
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.util.Log
+import com.gallerysync.app.data.localdb.entities.VideoRestorationJob
+import com.gallerysync.app.data.restoration.RestorationStatus
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
@@ -115,7 +127,6 @@ import kotlinx.coroutines.launch
 import com.gallerysync.app.ui.main.screens.remote.RemoteViewModel
 import com.gallerysync.app.workers.WorkModule
 import androidx.core.net.toUri
-import android.net.Uri
 import androidx.compose.material.icons.rounded.ClearAll
 
 // ─── Tab definitions ────────────────────────────────────────────────
@@ -123,6 +134,7 @@ private enum class UploadTab(val label: String, val icon: ImageVector) {
     All("All", Icons.Rounded.CloudUpload),
     Manual("Manual", Icons.Rounded.Upload),
     AutoBackup("Queue & Backup", Icons.Rounded.Backup),
+    Restorations("Restorations", Icons.Rounded.Download),
     Synced("Synced", Icons.Rounded.CheckCircle),
     Cancelled("Cancelled", Icons.Rounded.Close),
     Failed("Failed", Icons.Rounded.ErrorOutline)
@@ -134,6 +146,7 @@ fun ManageUploadsScreen(
     navController: NavController,
     viewModel: ManageUploadsViewModel = viewModel()
 ) {
+    val context = LocalContext.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
     val allUploads by viewModel.allUploads.collectAsStateWithLifecycle()
     val manualUploads by viewModel.manualUploads.collectAsStateWithLifecycle()
@@ -142,6 +155,7 @@ fun ManageUploadsScreen(
     val syncedUploads by viewModel.syncedUploads.collectAsStateWithLifecycle()
     val queuedPhotos by viewModel.queuedPhotos.collectAsStateWithLifecycle()
     val holdingPhotos by viewModel.holdingPhotos.collectAsStateWithLifecycle()
+    val restorationJobs by viewModel.restorationJobs.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedIds.collectAsStateWithLifecycle()
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
@@ -429,6 +443,7 @@ fun ManageUploadsScreen(
                         UploadTab.All -> allUploads.size + queuedPhotos.size
                         UploadTab.Manual -> manualUploads.size
                         UploadTab.AutoBackup -> autoBackupUploads.size + queuedPhotos.size
+                        UploadTab.Restorations -> restorationJobs.size
                         UploadTab.Synced -> syncedUploads.size
                         UploadTab.Cancelled -> cancelledCount
                         UploadTab.Failed -> failedCount
@@ -544,6 +559,13 @@ fun ManageUploadsScreen(
                             emptyIcon = Icons.Rounded.Backup,
                             snackbarHostState = snackbarHostState,
                             viewModel = viewModel
+                        )
+                        UploadTab.Restorations -> RestorationListContent(
+                            jobs = restorationJobs,
+                            onCancel = { viewModel.cancelRestoration(it) },
+                            onRetry = { viewModel.retryRestoration(it) },
+                            onDelete = { viewModel.deleteRestoration(it) },
+                            context = context
                         )
                         UploadTab.Synced -> UploadListContent(
                             uploads = syncedUploads,
@@ -1624,4 +1646,259 @@ private fun typeColor(type: UploadType): Color = when (type) {
     UploadType.Selective -> MaterialTheme.colorScheme.primary
     UploadType.Background -> MaterialTheme.colorScheme.tertiary
     UploadType.Instant -> MaterialTheme.colorScheme.secondary
+}
+
+// ─── Video Restoration UI (Phase 10.5) ───────────────────────────
+
+@Composable
+fun RestorationListContent(
+    jobs: List<VideoRestorationJob>,
+    onCancel: (String) -> Unit,
+    onRetry: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    context: Context
+) {
+    if (jobs.isEmpty()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(32.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.size(72.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.Download,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
+                }
+                Text(
+                    text = "No video restorations",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "Restored videos from Telegram cloud will appear here",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    } else {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(jobs, key = { it.restorationId }) { job ->
+                RestorationJobCard(
+                    job = job,
+                    onCancel = { onCancel(job.restorationId) },
+                    onRetry = { onRetry(job.restorationId) },
+                    onDelete = { onDelete(job.restorationId) },
+                    context = context
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun RestorationJobCard(
+    job: VideoRestorationJob,
+    onCancel: () -> Unit,
+    onRetry: () -> Unit,
+    onDelete: () -> Unit,
+    context: Context
+) {
+    val isDone = job.status == RestorationStatus.COMPLETED
+    val isFailed = job.status == RestorationStatus.FAILED
+    val isCancelled = job.status == RestorationStatus.CANCELLED
+    val isActive = job.status.isActive
+
+    val progressFloat = if (job.expectedFileSize > 0L) {
+        (job.downloadedBytes.toFloat() / job.expectedFileSize.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isDone) MaterialTheme.colorScheme.primaryContainer
+                    else if (isFailed) MaterialTheme.colorScheme.errorContainer
+                    else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = if (isDone) Icons.Rounded.CheckCircle
+                            else if (isFailed) Icons.Rounded.ErrorOutline
+                            else Icons.Rounded.Movie,
+                            contentDescription = null,
+                            tint = if (isDone) MaterialTheme.colorScheme.primary
+                            else if (isFailed) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = job.originalFileName,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1
+                    )
+                    val sizeText = android.text.format.Formatter.formatFileSize(context, job.expectedFileSize)
+                    val chunksText = if (job.totalChunks > 1) " • Chunks: ${job.verifiedChunks}/${job.totalChunks}" else ""
+                    Text(
+                        text = "$sizeText$chunksText",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = when {
+                        isDone -> MaterialTheme.colorScheme.primaryContainer
+                        isFailed -> MaterialTheme.colorScheme.errorContainer
+                        isCancelled -> MaterialTheme.colorScheme.surfaceContainerHigh
+                        else -> MaterialTheme.colorScheme.secondaryContainer
+                    }
+                ) {
+                    Text(
+                        text = job.status.userFriendlyDescription(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = when {
+                            isDone -> MaterialTheme.colorScheme.onPrimaryContainer
+                            isFailed -> MaterialTheme.colorScheme.onErrorContainer
+                            isCancelled -> MaterialTheme.colorScheme.onSurfaceVariant
+                            else -> MaterialTheme.colorScheme.onSecondaryContainer
+                        },
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            if (isActive) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    LinearProgressIndicator(
+                        progress = { progressFloat },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "${(progressFloat * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        val dlText = android.text.format.Formatter.formatFileSize(context, job.downloadedBytes)
+                        val totalText = android.text.format.Formatter.formatFileSize(context, job.expectedFileSize)
+                        Text(
+                            text = "$dlText / $totalText",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            if (isFailed && !job.lastError.isNullOrBlank()) {
+                Text(
+                    text = job.lastError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            // Action row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (isActive) {
+                    FilledTonalButton(
+                        onClick = onCancel,
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    ) {
+                        Text("Cancel")
+                    }
+                } else if (isFailed || isCancelled) {
+                    FilledTonalButton(
+                        onClick = onRetry
+                    ) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Retry")
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    IconButton(onClick = onDelete) {
+                        Icon(Icons.Rounded.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                    }
+                } else if (isDone) {
+                    if (!job.destinationUri.isNullOrBlank()) {
+                        Button(
+                            onClick = {
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                                        setDataAndType(Uri.parse(job.destinationUri), "video/*")
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    Log.e("ManageUploads", "Error playing video: ${e.message}")
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Open")
+                        }
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    IconButton(onClick = onDelete) {
+                        Icon(Icons.Rounded.Delete, contentDescription = "Remove", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
 }

@@ -1,6 +1,7 @@
 package com.gallerysync.app.ui.main
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -16,9 +17,11 @@ import androidx.work.WorkInfo
 import com.gallerysync.app.data.localdb.DbHolder
 import com.gallerysync.app.data.localdb.entities.Photo
 import com.gallerysync.app.data.localdb.entities.RemotePhoto
+import com.gallerysync.app.data.localdb.recovery.InstallRecoveryManager
 import com.gallerysync.app.data.mediastore.AlbumInfo
 import com.gallerysync.app.data.mediastore.LocalPhotoSource
 import com.gallerysync.app.data.mediastore.MediaStoreScanner
+import com.gallerysync.app.utils.PermissionManager
 import com.gallerysync.app.utils.getExtFromMimeType
 import kotlinx.coroutines.flow.flatMapLatest
 import com.gallerysync.app.data.mediastore.LocalUiPhoto
@@ -29,11 +32,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     var currentDestination by mutableStateOf<Screens>(Screens.LocalPhotos)
@@ -233,6 +238,100 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             else photos.filter { it.bucketId == albumId }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    // ── Pull-to-Refresh State ──
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
+    private val _refreshError = MutableStateFlow<String?>(null)
+    val refreshError: StateFlow<String?> = _refreshError.asStateFlow()
+
+    fun clearRefreshError() {
+        _refreshError.value = null
+    }
+
+    /**
+     * Executes an incremental, offline-safe pull-to-refresh of the local gallery and backup states.
+     *
+     * Guarantees:
+     * - Never automatically releases or uploads HOLDING media.
+     * - Discovers newly added images and videos (indexed as STATUS_NONE after baseline).
+     * - Prunes deleted items from the local database.
+     * - Refreshes local MediaStore UI list and album collections.
+     * - Refreshes database backup statuses without forcing network uploads or triggering duplicate workers.
+     * - Prevents concurrent refresh operations.
+     */
+    fun refreshGallery(onComplete: (() -> Unit)? = null) {
+        if (_isRefreshing.value) {
+            Log.d("MainViewModel", "Refresh already running, ignoring duplicate pull-to-refresh request")
+            return
+        }
+
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            _refreshError.value = null
+            val startTime = System.currentTimeMillis()
+
+            try {
+                withContext(Dispatchers.IO) {
+                    val context = getApplication<Application>()
+                    val photoDao = DbHolder.database.photoDao()
+
+                    if (PermissionManager.hasAnyMediaAccess(context)) {
+                        val isBaselineDone = InstallRecoveryManager.isBaselineCompleted(DbHolder.database)
+                        val baselineTimestamp = InstallRecoveryManager.getBaselineTimestamp(DbHolder.database)
+
+                        // 1. Unified incremental scan in bounded batches
+                        MediaStoreScanner.scanAllInBatches(context, batchSize = 200) { batch ->
+                            val photos = batch.map { item ->
+                                val itemTimestampMs = maxOf(item.dateAdded, item.dateModified) * 1000L
+                                val status = if (!isBaselineDone || (baselineTimestamp > 0L && itemTimestampMs <= baselineTimestamp)) {
+                                    Photo.STATUS_HOLDING
+                                } else {
+                                    Photo.STATUS_NONE
+                                }
+                                item.toPhoto(defaultUploadStatus = status)
+                            }
+                            // Insert with IGNORE: preserves all existing HOLDING and DONE items!
+                            photoDao.insertPhotos(*photos.toTypedArray())
+
+                            // Backfill metadata for existing items
+                            batch.forEach { item ->
+                                if (item.width != null || item.height != null || item.duration != null) {
+                                    photoDao.updateMediaMetadataIfMissing(
+                                        localId = item.id,
+                                        mediaType = item.mediaType,
+                                        width = item.width,
+                                        height = item.height,
+                                        duration = item.duration
+                                    )
+                                }
+                            }
+                        }
+
+                        // 2. Safe deletion pruning (only runs if full access granted)
+                        MediaStoreScanner.pruneDeletedMedia(context, photoDao)
+                    } else {
+                        Log.w("MainViewModel", "No media access permission granted during pull-to-refresh")
+                    }
+
+                    // 3. Reload MediaStore UI cache and albums
+                    loadMediaStorePhotosInternal(context)
+                }
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error executing gallery pull-to-refresh", e)
+                _refreshError.value = "Failed to refresh gallery: ${e.message ?: "Unknown error"}"
+            } finally {
+                // Smooth indicator dismissal with minimum display threshold (400ms)
+                val elapsed = System.currentTimeMillis() - startTime
+                if (elapsed < 400L) {
+                    delay(400L - elapsed)
+                }
+                _isRefreshing.value = false
+                onComplete?.invoke()
+            }
+        }
+    }
+
     fun refreshMediaStorePhotos() {
         loadMediaStorePhotos()
     }
@@ -241,49 +340,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
             try {
-                val scannedPhotos = mutableListOf<LocalUiPhoto>()
-                MediaStoreScanner.scanAllInBatches(context, batchSize = 1000) { batch ->
-                    scannedPhotos.addAll(batch.map { it.toLocalUiPhoto() })
-                }
-
-                // Fetch synced status from DB
-                val syncedMap = DbHolder.database.photoDao().getSyncedPhotoMap().associate { it.localId to it.remoteId }
-
-                // Update remoteId for photos that are synced
-                val updatedPhotos = scannedPhotos.map { photo ->
-                    val remoteId = syncedMap[photo.localId]
-                    if (remoteId != null) photo.copy(remoteId = remoteId) else photo
-                }
-
-                _mediaStorePhotos.value = updatedPhotos
-
-                // Derive album list from loaded photos ("All" + per-bucket)
-                val bucketGroups = updatedPhotos.groupBy { it.bucketId }
-                val albumList = mutableListOf(
-                    AlbumInfo(
-                        id = -1L,
-                        label = "All",
-                        count = updatedPhotos.size,
-                        coverUri = updatedPhotos.firstOrNull()?.pathUri ?: ""
-                    )
-                )
-                bucketGroups.entries
-                    .sortedByDescending { it.value.size }
-                    .forEach { (bucketId, bucketPhotos) ->
-                        val name = bucketPhotos.first().bucketName.ifEmpty { "Unknown" }
-                        albumList.add(
-                            AlbumInfo(
-                                id = bucketId,
-                                label = name,
-                                count = bucketPhotos.size,
-                                coverUri = bucketPhotos.first().pathUri
-                            )
-                        )
-                    }
-                _albums.value = albumList
+                loadMediaStorePhotosInternal(context)
             } catch (e: Exception) {
                 Log.e("MainViewModel", "Error loading MediaStore photos", e)
             }
         }
+    }
+
+    private suspend fun loadMediaStorePhotosInternal(context: Context) {
+        val scannedPhotos = mutableListOf<LocalUiPhoto>()
+        MediaStoreScanner.scanAllInBatches(context, batchSize = 1000) { batch ->
+            scannedPhotos.addAll(batch.map { it.toLocalUiPhoto() })
+        }
+
+        // Fetch synced status from DB
+        val syncedMap = DbHolder.database.photoDao().getSyncedPhotoMap().associate { it.localId to it.remoteId }
+
+        // Update remoteId for photos that are synced
+        val updatedPhotos = scannedPhotos.map { photo ->
+            val remoteId = syncedMap[photo.localId]
+            if (remoteId != null) photo.copy(remoteId = remoteId) else photo
+        }
+
+        _mediaStorePhotos.value = updatedPhotos
+
+        // Derive album list from loaded photos ("All" + per-bucket)
+        val bucketGroups = updatedPhotos.groupBy { it.bucketId }
+        val albumList = mutableListOf(
+            AlbumInfo(
+                id = -1L,
+                label = "All",
+                count = updatedPhotos.size,
+                coverUri = updatedPhotos.firstOrNull()?.pathUri ?: ""
+            )
+        )
+        bucketGroups.entries
+            .sortedByDescending { it.value.size }
+            .forEach { (bucketId, bucketPhotos) ->
+                val name = bucketPhotos.first().bucketName.ifEmpty { "Unknown" }
+                albumList.add(
+                    AlbumInfo(
+                        id = bucketId,
+                        label = name,
+                        count = bucketPhotos.size,
+                        coverUri = bucketPhotos.first().pathUri
+                    )
+                )
+            }
+        _albums.value = albumList
     }
 }

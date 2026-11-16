@@ -4,7 +4,7 @@ package com.gallerysync.app.data.localdb.entities
  * Lifecycle states of a chunked video backup.
  *
  * Transitions:
- * PENDING -> HASHING -> UPLOADING -> VERIFYING -> DONE
+ * PENDING -> HASHING -> UPLOADING -> VERIFYING -> MANIFEST_UPLOADED -> DONE
  * Any non-terminal state -> FAILED (on unrecoverable error)
  * Any non-terminal state -> CANCELLED (on user cancellation)
  */
@@ -13,6 +13,7 @@ enum class ChunkedBackupStatus {
     HASHING,
     UPLOADING,
     VERIFYING,
+    MANIFEST_UPLOADED,
     DONE,
     FAILED,
     CANCELLED;

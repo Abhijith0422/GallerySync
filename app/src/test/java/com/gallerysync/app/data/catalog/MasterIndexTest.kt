@@ -166,4 +166,153 @@ class MasterIndexTest {
         )
         emptyShard.validate()
     }
+
+    @Test
+    fun testManifestShard_validationAndSerializationRoundtrip() {
+        val manifests = (1..100).map { i ->
+            ManifestReference(
+                backupId = "backup_$i",
+                fileId = "file_id_$i",
+                messageId = 1000L + i,
+                fileName = "manifest_$i.json",
+                sizeBytes = 2048L,
+                sha256 = "sha256_$i" + "a".repeat(40),
+                mediaSha256 = "media_sha256_$i" + "b".repeat(40),
+                displayName = "video_$i.mp4"
+            )
+        }
+
+        val shard = com.gallerysync.app.data.catalog.models.ManifestShard(
+            format = com.gallerysync.app.data.catalog.models.ManifestShard.FORMAT_IDENTIFIER,
+            version = com.gallerysync.app.data.catalog.models.ManifestShard.CURRENT_VERSION,
+            shardId = "mshard_1",
+            createdAt = System.currentTimeMillis(),
+            botId = 123456789L,
+            channelId = -1001234567890L,
+            itemCount = manifests.size,
+            manifests = manifests
+        )
+        shard.validate()
+
+        val json = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(shard)
+        val deserialized = mapper.readValue(json, com.gallerysync.app.data.catalog.models.ManifestShard::class.java)
+        deserialized.validate()
+        assertEquals(100, deserialized.itemCount)
+        assertEquals("backup_1", deserialized.manifests[0].backupId)
+    }
+
+    @Test
+    fun testMasterIndexScalabilityBounds_documentSizesSafelyBelow20MB() {
+        // 1. Root index with 1,000 active media records and 1,000 active manifests
+        val activeMedia = (1..1000).map { createSampleMediaRecord(it) }
+        val activeManifests = (1..1000).map { i ->
+            ManifestReference(
+                backupId = "backup_$i",
+                fileId = "file_id_$i",
+                messageId = 1000L + i,
+                fileName = "manifest_$i.json",
+                sizeBytes = 2048L,
+                sha256 = "sha256_$i" + "a".repeat(40),
+                mediaSha256 = "media_sha256_$i" + "b".repeat(40),
+                displayName = "video_$i.mp4"
+            )
+        }
+
+        // Shard references representing 50,000 historical media items (50 shards)
+        val mediaShards = (1..50).map { s ->
+            ShardReference(
+                shardId = "media_shard_$s",
+                fileId = "tg_file_mshard_$s",
+                messageId = 5000L + s,
+                fileName = "shard_$s.json",
+                sizeBytes = 250000L,
+                sha256 = "sha256_shard_$s",
+                itemCount = 1000
+            )
+        }
+
+        // Manifest shard references representing 10,000 historical manifests (10 shards)
+        val manifestShards = (1..10).map { s ->
+            ShardReference(
+                shardId = "manifest_shard_$s",
+                fileId = "tg_file_manshard_$s",
+                messageId = 6000L + s,
+                fileName = "manifest_shard_$s.json",
+                sizeBytes = 150000L,
+                sha256 = "sha256_manshard_$s",
+                itemCount = 1000
+            )
+        }
+
+        val largeMasterIndex = MasterIndex(
+            format = MasterIndex.FORMAT_IDENTIFIER,
+            version = MasterIndex.CURRENT_VERSION,
+            generation = 50L,
+            updatedAt = System.currentTimeMillis(),
+            botId = 123456789L,
+            channelId = -1001234567890L,
+            manifests = activeManifests,
+            manifestShards = manifestShards,
+            shards = mediaShards,
+            activeMediaRecords = activeMedia
+        )
+        largeMasterIndex.validate()
+
+        // Total media: 1,000 active + 50,000 in shards = 51,000
+        assertEquals(51000, largeMasterIndex.totalMediaCount)
+        // Total manifests: 1,000 active + 10,000 in shards = 11,000
+        assertEquals(11000, largeMasterIndex.totalManifestCount)
+
+        // Serialize root index
+        val rootBytes = mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(largeMasterIndex)
+        val rootSize = rootBytes.size
+
+        // Telegram Bot API getFile download limit is 20,000,000 bytes (20 MB)
+        val telegramBotApiLimit = 20_000_000L
+        assertTrue(
+            "Root master index size ($rootSize bytes) must be well below 20 MB Telegram limit",
+            rootSize < 2_000_000 // In fact strictly under 2 MB (we expect ~600-800 KB)
+        )
+        assertTrue("Root master index must be safely below 20 MB limit", rootSize < telegramBotApiLimit)
+
+        // Serialize a 1,000-item CatalogShard
+        val sampleShard = CatalogShard(
+            format = CatalogShard.FORMAT_IDENTIFIER,
+            version = CatalogShard.CURRENT_VERSION,
+            shardId = "shard_max_test",
+            createdAt = System.currentTimeMillis(),
+            botId = 123456789L,
+            channelId = -1001234567890L,
+            itemCount = activeMedia.size,
+            records = activeMedia
+        )
+        sampleShard.validate()
+        val shardBytes = mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(sampleShard)
+        val shardSize = shardBytes.size
+        assertTrue(
+            "CatalogShard size ($shardSize bytes) must be well below 20 MB Telegram limit",
+            shardSize < 500_000 // In fact strictly under 500 KB (~250 KB)
+        )
+        assertTrue("CatalogShard must be safely below 20 MB limit", shardSize < telegramBotApiLimit)
+
+        // Serialize a 1,000-item ManifestShard
+        val sampleManifestShard = com.gallerysync.app.data.catalog.models.ManifestShard(
+            format = com.gallerysync.app.data.catalog.models.ManifestShard.FORMAT_IDENTIFIER,
+            version = com.gallerysync.app.data.catalog.models.ManifestShard.CURRENT_VERSION,
+            shardId = "mshard_max_test",
+            createdAt = System.currentTimeMillis(),
+            botId = 123456789L,
+            channelId = -1001234567890L,
+            itemCount = activeManifests.size,
+            manifests = activeManifests
+        )
+        sampleManifestShard.validate()
+        val mShardBytes = mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(sampleManifestShard)
+        val mShardSize = mShardBytes.size
+        assertTrue(
+            "ManifestShard size ($mShardSize bytes) must be well below 20 MB Telegram limit",
+            mShardSize < 500_000 // In fact strictly under 500 KB (~200 KB)
+        )
+        assertTrue("ManifestShard must be safely below 20 MB limit", mShardSize < telegramBotApiLimit)
+    }
 }

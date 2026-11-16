@@ -149,6 +149,30 @@ class BackupManifestManager(
         val manifestSha256 = ContentHasher.computeHash(manifestJsonBytes)
         val manifestFileName = "gallerysync_manifest_${backup.backupId}.json"
 
+        // If manifest was already uploaded in a previous iteration, reuse it without duplicate upload
+        if (!backup.manifestFileId.isNullOrBlank() && backup.manifestMessageId != null && backup.manifestMessageId > 0L) {
+            Log.i(TAG, "Manifest already uploaded previously (fileId=${backup.manifestFileId}, messageId=${backup.manifestMessageId}). Reusing existing manifest reference.")
+            val manifestRef = ManifestReference(
+                backupId = backup.backupId,
+                fileId = backup.manifestFileId,
+                messageId = backup.manifestMessageId,
+                fileName = manifestFileName,
+                sizeBytes = manifestJsonBytes.size.toLong(),
+                sha256 = manifestSha256,
+                mediaSha256 = fileSha256,
+                displayName = backup.fileName
+            )
+            val pendingEntry = PendingCatalogEntry(
+                entryType = PendingCatalogEntry.TYPE_MANIFEST_REFERENCE,
+                referenceId = backup.backupId,
+                payloadJson = mapper.writeValueAsString(manifestRef),
+                createdAt = System.currentTimeMillis(),
+                status = PendingCatalogEntry.STATUS_PENDING
+            )
+            pendingDao.insertOrReplace(pendingEntry)
+            return@withContext ManifestUploadResult.Success(manifestRef, manifest)
+        }
+
         Log.i(TAG, "Uploading manifest $manifestFileName (${manifestJsonBytes.size} bytes, SHA-256=$manifestSha256)")
 
         // 7. Upload to Telegram via TelegramCatalogApi
@@ -166,7 +190,7 @@ class BackupManifestManager(
             is TelegramCatalogUploadResult.Success -> {
                 Log.i(TAG, "✅ Manifest uploaded successfully: fileId=${uploadResult.fileId}, messageId=${uploadResult.messageId}")
 
-                // 8. Update Room ChunkedBackup record to DONE
+                // 8. Update Room ChunkedBackup record to MANIFEST_UPLOADED (NOT DONE until MasterIndex pinned)
                 chunkedBackupDao.updateManifestInfo(
                     backupId = backup.backupId,
                     fileId = uploadResult.fileId,

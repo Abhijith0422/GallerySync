@@ -323,20 +323,38 @@ class PeriodicPhotoBackupWorker(
                             )
                             when (manifestRes) {
                                 is com.gallerysync.app.data.catalog.ManifestUploadResult.Success -> {
-                                    Log.i("PeriodicBackup", "Manifest uploaded for ${chunkResult.backupId} (fileId=${manifestRes.manifestReference.fileId}). Recording success.")
-                                    UploadQueueRepository.recordSuccess(
-                                        queueId = queueItem.id,
-                                        localId = queueItem.localId,
-                                        remoteId = "CHUNKED_${chunkResult.backupId}",
-                                        messageId = manifestRes.manifestReference.messageId
-                                    )
-                                    // Commit to Master Index
-                                    com.gallerysync.app.data.catalog.MasterIndexManager.defaultInstance.commitPendingEntries(
+                                    Log.i("PeriodicBackup", "Manifest uploaded for ${chunkResult.backupId} (fileId=${manifestRes.manifestReference.fileId}). Committing to Master Index...")
+                                    val commitRes = com.gallerysync.app.data.catalog.MasterIndexManager.defaultInstance.commitPendingEntries(
                                         context = appContext,
                                         botToken = botToken,
                                         channelId = channelId
                                     )
-                                    true
+                                    when (commitRes) {
+                                        is com.gallerysync.app.data.catalog.MasterIndexCommitResult.Success -> {
+                                            Log.i("PeriodicBackup", "Master index committed for ${chunkResult.backupId}. Recording queue success.")
+                                            UploadQueueRepository.recordSuccess(
+                                                queueId = queueItem.id,
+                                                localId = queueItem.localId,
+                                                remoteId = "CHUNKED_${chunkResult.backupId}",
+                                                messageId = manifestRes.manifestReference.messageId
+                                            )
+                                            true
+                                        }
+                                        is com.gallerysync.app.data.catalog.MasterIndexCommitResult.RateLimited -> {
+                                            Log.w("PeriodicBackup", "Rate limited on master index commit (${commitRes.retryAfterSeconds}s). Releasing claim for delayed retry.")
+                                            val err = TelegramUploadDispatcher.UploadError.RateLimited(commitRes.retryAfterSeconds)
+                                            UploadQueueRepository.recordFailure(queueItem.id, queueItem.localId, err)
+                                            false
+                                        }
+                                        else -> {
+                                            val errMsg = (commitRes as? com.gallerysync.app.data.catalog.MasterIndexCommitResult.Error)?.message
+                                                ?: (commitRes as? com.gallerysync.app.data.catalog.MasterIndexCommitResult.PinVerificationFailed)?.reason
+                                                ?: "Catalog publication pending"
+                                            Log.w("PeriodicBackup", "Master index commit deferred: $errMsg. Leaving queue item for retry without re-uploading media.")
+                                            DbHolder.database.uploadQueueDao().resetStaleItem(queueItem.id)
+                                            false
+                                        }
+                                    }
                                 }
                                 is com.gallerysync.app.data.catalog.ManifestUploadResult.RateLimited -> {
                                     val err = TelegramUploadDispatcher.UploadError.RateLimited(manifestRes.retryAfterSeconds)

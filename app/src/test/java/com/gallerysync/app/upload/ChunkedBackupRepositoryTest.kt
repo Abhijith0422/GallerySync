@@ -197,27 +197,32 @@ class ChunkedBackupRepositoryTest {
     }
 
     @Test
-    fun testRecordManifestSuccessTransitionsToDone() = runBlocking {
+    fun testRecordManifestSuccessTransitionsToManifestUploadedAndMarkDone() = runBlocking {
         val backup = sampleBackup()
         val chunks = ChunkedBackupRepository.calculateChunks(backup.backupId, backup.fileSize)
         ChunkedBackupRepository.createBackupWithChunks(backup, chunks, database)
 
-        // Complete manifest
+        // Upload manifest -> MANIFEST_UPLOADED
         val success = ChunkedBackupRepository.recordManifestSuccess(
             backupId = backup.backupId,
             manifestFileId = "manifest_doc_file_id",
             manifestMessageId = 999L,
-            completedAt = 1750000000000L,
             database = database
         )
         assertTrue(success)
 
         val updated = ChunkedBackupRepository.getBackupById(backup.backupId, database)
         assertNotNull(updated)
-        assertEquals(ChunkedBackupStatus.DONE, updated!!.status)
+        assertEquals(ChunkedBackupStatus.MANIFEST_UPLOADED, updated!!.status)
         assertEquals("manifest_doc_file_id", updated.manifestFileId)
         assertEquals(999L, updated.manifestMessageId)
-        assertEquals(1750000000000L, updated.completedAt)
+
+        // Confirm in Master Index -> DONE
+        ChunkedBackupRepository.markBackupDone(backup.backupId, completedAt = 1750000000000L, database = database)
+        val done = ChunkedBackupRepository.getBackupById(backup.backupId, database)
+        assertNotNull(done)
+        assertEquals(ChunkedBackupStatus.DONE, done!!.status)
+        assertEquals(1750000000000L, done.completedAt)
     }
 
     @Test

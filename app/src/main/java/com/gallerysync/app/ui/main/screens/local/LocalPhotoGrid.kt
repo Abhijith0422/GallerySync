@@ -45,6 +45,11 @@ import androidx.compose.animation.core.snap
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.navigation.NavController
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -220,12 +225,16 @@ private fun createLayoutCache(
     )
 }
 
-@OptIn(ExperimentalAnimationApi::class, ExperimentalSharedTransitionApi::class, ExperimentalMaterial3ExpressiveApi::class, ExperimentalFoundationApi::class, kotlinx.coroutines.FlowPreview::class)
+@OptIn(ExperimentalAnimationApi::class, ExperimentalSharedTransitionApi::class, ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class, ExperimentalFoundationApi::class, kotlinx.coroutines.FlowPreview::class)
 @Composable
 fun LocalPhotoGrid(
     localPhotos: LazyPagingItems<LocalUiPhoto>,
     totalCount: Int,
     allPhotos: List<LocalUiPhoto>,
+    isRefreshing: Boolean = false,
+    onRefresh: () -> Unit = {},
+    refreshError: String? = null,
+    onClearRefreshError: () -> Unit = {},
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     selectionMode: Boolean,
@@ -252,6 +261,23 @@ fun LocalPhotoGrid(
     val glideSelectionBehavior by Preferences.getStringFlow(Preferences.glideSelectionBehaviorKey, "Fixed").collectAsStateWithLifecycle()
     val thumbnailResolution = Preferences.getInt(Preferences.thumbnailResolutionKey, Preferences.defaultThumbnailResolution)
     var isScrollbarDragging by remember { mutableStateOf(false) }
+
+    val pullToRefreshState = rememberPullToRefreshState()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(refreshError) {
+        refreshError?.let { msg ->
+            val result = snackbarHostState.showSnackbar(
+                message = msg,
+                actionLabel = "Retry",
+                duration = SnackbarDuration.Short
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                onRefresh()
+            }
+            onClearRefreshError()
+        }
+    }
 
     if (selectionMode) {
         BackHandler(enabled = true) {
@@ -551,22 +577,47 @@ fun LocalPhotoGrid(
             )
         }
 
-        Box(
-            modifier = Modifier.fillMaxSize()
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = {
+                if (!selectionMode && !isRefreshing) {
+                    onRefresh()
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+            state = pullToRefreshState,
+            indicator = {
+                if (!selectionMode) {
+                    PullToRefreshDefaults.Indicator(
+                        state = pullToRefreshState,
+                        isRefreshing = isRefreshing,
+                        modifier = Modifier.align(Alignment.TopCenter),
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
         ) {
-        // Only show loading if we don't have cached photos
-        if (localPhotos.loadState.refresh == LoadState.Loading && allPhotos.isEmpty()) {
+        // Only show full loading if we don't have cached photos and not currently pull-refreshing
+        if (localPhotos.loadState.refresh == LoadState.Loading && allPhotos.isEmpty() && !isRefreshing) {
             LoadAnimation(modifier = Modifier.align(Alignment.Center))
         } else if (allPhotos.isEmpty()) {
-            ExpressiveEmptyState(
-                icon = Icons.Rounded.PhoneAndroid,
-                title = "No photos on device",
-                description = "Grant storage permission or capture some memories to see them appear here.",
-                actionText = "Grant Permission",
-                onActionClick = {
-                    // Navigate to settings or trigger permission dialog
-                }
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
+                contentAlignment = Alignment.Center
+            ) {
+                ExpressiveEmptyState(
+                    icon = Icons.Rounded.PhoneAndroid,
+                    title = "No photos on device",
+                    description = "Grant storage permission or capture some memories to see them appear here.",
+                    actionText = "Grant Permission",
+                    onActionClick = {
+                        // Navigate to settings or trigger permission dialog
+                    }
+                )
+            }
         } else {
             Box(modifier = Modifier.fillMaxSize()) {
 
@@ -718,6 +769,13 @@ fun LocalPhotoGrid(
                 )
             }
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 88.dp)
+        )
     }
     } // end Column
 }

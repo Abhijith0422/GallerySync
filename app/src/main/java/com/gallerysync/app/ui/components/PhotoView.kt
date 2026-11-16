@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.CloudOff
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Error
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Icon
@@ -25,9 +26,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.content.Intent
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import com.gallerysync.app.data.localdb.entities.VideoRestorationJob
+import com.gallerysync.app.data.restoration.RestorationStatus
+import com.gallerysync.app.data.restoration.VideoRestorationManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableState
@@ -116,6 +129,84 @@ fun PhotoView(
 
     // Media type and local URI resolution for video playback
     val isVideo = photo.mediaType.equals("VIDEO", ignoreCase = true)
+
+    // Video restoration state for cloud videos (Phase 10.5)
+    var activeRestorationJobId by rememberSaveable { mutableStateOf<String?>(null) }
+    var activeRestorationJob by remember { mutableStateOf<VideoRestorationJob?>(null) }
+
+    androidx.compose.runtime.LaunchedEffect(photo.localId, photo.remoteId, activeRestorationJobId) {
+        val backupId = if (photo.remoteId?.startsWith("CHUNKED_") == true) {
+            photo.remoteId.removePrefix("CHUNKED_")
+        } else {
+            photo.localId.takeIf { it.isNotBlank() }
+        }
+        val existingJob = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val dao = DbHolder.database.videoRestorationDao()
+            if (activeRestorationJobId != null) {
+                dao.getById(activeRestorationJobId!!)
+            } else if (!backupId.isNullOrBlank()) {
+                dao.getByBackupId(backupId)
+            } else if (photo.remoteId != null) {
+                dao.getByRemoteId(photo.remoteId)
+            } else {
+                null
+            }
+        }
+        if (existingJob != null && existingJob.status != RestorationStatus.CANCELLED) {
+            activeRestorationJobId = existingJob.restorationId
+            activeRestorationJob = existingJob
+        }
+    }
+
+    androidx.compose.runtime.LaunchedEffect(activeRestorationJobId) {
+        activeRestorationJobId?.let { id ->
+            DbHolder.database.videoRestorationDao().observeById(id).collect { job ->
+                activeRestorationJob = job
+            }
+        }
+    }
+
+    val safLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("video/mp4")
+    ) { uri ->
+        if (uri != null) {
+            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val backupId = if (photo.remoteId?.startsWith("CHUNKED_") == true) {
+                    photo.remoteId.removePrefix("CHUNKED_")
+                } else {
+                    photo.localId.takeIf { it.isNotBlank() }
+                }
+
+                val chunkedBackup = backupId?.let { DbHolder.database.chunkedBackupDao().getById(it) }
+                val remotePhoto = photo.remoteId?.let { DbHolder.database.remotePhotoDao().getById(it) }
+
+                val fileName = chunkedBackup?.fileName ?: remotePhoto?.fileName
+                    ?: "video_${photo.localId.takeIf { it.isNotBlank() } ?: System.currentTimeMillis()}.mp4"
+                val totalChunks = chunkedBackup?.totalChunks ?: 1
+                val fileSize = chunkedBackup?.fileSize ?: remotePhoto?.fileSize ?: 0L
+                val fileSha256 = chunkedBackup?.fileSha256 ?: remotePhoto?.contentHash ?: photo.contentHash ?: ""
+
+                val job = VideoRestorationManager.defaultInstance.createOrGetJob(
+                    context = context,
+                    backupId = chunkedBackup?.backupId,
+                    remoteId = if (chunkedBackup == null) photo.remoteId else null,
+                    localId = photo.localId,
+                    fileName = fileName,
+                    mimeType = "video/mp4",
+                    fileSize = fileSize,
+                    fileSha256 = fileSha256,
+                    totalChunks = totalChunks,
+                    destinationUri = uri.toString()
+                )
+
+                WorkModule.VideoRestoration(job.restorationId).enqueue()
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    activeRestorationJobId = job.restorationId
+                }
+            }
+        }
+    }
+
     val directUri = remember(photo.pathUri) {
         if (LocalMediaUriValidator.isLocalMediaUri(photo.pathUri)) photo.pathUri else null
     }
@@ -345,22 +436,126 @@ fun PhotoView(
                             .padding(bottom = 90.dp)
                             .align(Alignment.Center)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.CloudDownload,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Text(
-                                text = "Video stored in Cloud • Download to device for local playback",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.White
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.CloudDownload,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Text(
+                                    text = "Video stored in Cloud",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color.White
+                                )
+                            }
+
+                            val currentJob = activeRestorationJob
+                            if (currentJob != null && currentJob.status.isActive) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    val progressFloat = if (currentJob.expectedFileSize > 0L) {
+                                        (currentJob.downloadedBytes.toFloat() / currentJob.expectedFileSize.toFloat()).coerceIn(0f, 1f)
+                                    } else 0f
+
+                                    LinearProgressIndicator(
+                                        progress = { progressFloat },
+                                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
+                                    )
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = currentJob.status.userFriendlyDescription(),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = Color.White.copy(alpha = 0.8f)
+                                        )
+                                        Text(
+                                            text = "${(progressFloat * 100).toInt()}%",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = Color.White.copy(alpha = 0.8f)
+                                        )
+                                    }
+
+                                    if (currentJob.totalChunks > 1) {
+                                        Text(
+                                            text = "Chunks: ${currentJob.verifiedChunks} / ${currentJob.totalChunks}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color.White.copy(alpha = 0.6f)
+                                        )
+                                    }
+
+                                    FilledTonalButton(
+                                        onClick = {
+                                            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                                WorkModule.VideoRestoration(currentJob.restorationId).cancel()
+                                                DbHolder.database.videoRestorationDao().updateStatus(currentJob.restorationId, RestorationStatus.CANCELLED)
+                                            }
+                                        },
+                                        colors = ButtonDefaults.filledTonalButtonColors(
+                                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                        ),
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    ) {
+                                        Text("Cancel")
+                                    }
+                                }
+                            } else if (currentJob != null && currentJob.status == RestorationStatus.COMPLETED) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "Restoration Complete! Saved to device.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = Color.Green
+                                    )
+                                    Button(
+                                        onClick = {
+                                            currentJob.destinationUri?.let { destUriStr ->
+                                                try {
+                                                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                        setDataAndType(destUriStr.toUri(), "video/*")
+                                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                    }
+                                                    context.startActivity(intent)
+                                                } catch (e: Exception) {
+                                                    android.util.Log.e("PhotoView", "Failed opening restored video: ${e.message}")
+                                                }
+                                            }
+                                        }
+                                    ) {
+                                        Icon(Icons.Rounded.PlayArrow, contentDescription = null)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Open Restored Video")
+                                    }
+                                }
+                            } else {
+                                Button(
+                                    onClick = {
+                                        val suggestedName = "restored_video_${photo.localId.takeIf { it.isNotBlank() } ?: System.currentTimeMillis()}.mp4"
+                                        safLauncher.launch(suggestedName)
+                                    }
+                                ) {
+                                    Icon(Icons.Rounded.Download, contentDescription = null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Restore Video to Device")
+                                }
+                            }
                         }
                     }
                 }
@@ -412,12 +607,17 @@ fun PhotoView(
                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 downloadState = photoDownloadState,
                 onClickDownload = {
-                    android.util.Log.d("PhotoView", "Download button clicked!")
-                    photo.remoteId?.let { remoteId ->
-                        scope.launch {
-                            handleDownloadClick(remoteId)
-                        }
-                    } ?: android.util.Log.e("PhotoView", "No remoteId found for photo!")
+                    android.util.Log.d("PhotoView", "Download/Restore button clicked!")
+                    if (isVideo) {
+                        val suggestedName = "restored_video_${photo.localId.takeIf { it.isNotBlank() } ?: System.currentTimeMillis()}.mp4"
+                        safLauncher.launch(suggestedName)
+                    } else {
+                        photo.remoteId?.let { remoteId ->
+                            scope.launch {
+                                handleDownloadClick(remoteId)
+                            }
+                        } ?: android.util.Log.e("PhotoView", "No remoteId found for photo!")
+                    }
                 }
             )
         }

@@ -11,6 +11,7 @@ import com.gallerysync.app.api.TelegramCatalogChatInfo
 import com.gallerysync.app.data.catalog.models.CatalogMediaRecord
 import com.gallerysync.app.data.catalog.models.CatalogShard
 import com.gallerysync.app.data.catalog.models.ManifestReference
+import com.gallerysync.app.data.catalog.models.ManifestShard
 import com.gallerysync.app.data.catalog.models.MasterIndex
 import com.gallerysync.app.data.catalog.models.ShardReference
 import com.gallerysync.app.data.localdb.DbHolder
@@ -23,6 +24,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.UUID
+
+sealed class MasterIndexReconciliationResult {
+    data class Reconciled(val generation: Long, val pinnedMessageId: Long) : MasterIndexReconciliationResult()
+    object AlreadyUpToDate : MasterIndexReconciliationResult()
+    data class NoRemoteIndex(val reason: String) : MasterIndexReconciliationResult()
+    data class Error(val message: String) : MasterIndexReconciliationResult()
+}
 
 sealed class MasterIndexCommitResult {
     data class Success(
@@ -75,6 +83,14 @@ class MasterIndexManager(
             val pendingDao = database.pendingCatalogEntryDao()
             val catalogDao = database.backupCatalogDao()
 
+            val botId = TelegramCatalogApi.extractBotId(botToken)
+            if (botId <= 0L) {
+                return@withContext MasterIndexCommitResult.Error("Invalid botToken format", isRetryable = false)
+            }
+
+            // 0. Pre-commit reconciliation: check if remote pinned index is ahead of local catalog (e.g. crash after pin)
+            internalReconcileWithRemoteCatalog(botToken, channelId, database)
+
             val pendingEntries = pendingDao.getPendingEntries()
             if (pendingEntries.isEmpty() && !forceCommit) {
                 Log.d(TAG, "No pending catalog entries to commit.")
@@ -82,11 +98,6 @@ class MasterIndexManager(
             }
 
             Log.i(TAG, "Starting master index commit for channel $channelId (${pendingEntries.size} pending entries)")
-
-            val botId = TelegramCatalogApi.extractBotId(botToken)
-            if (botId <= 0L) {
-                return@withContext MasterIndexCommitResult.Error("Invalid botToken format", isRetryable = false)
-            }
 
             // 1. Resolve base MasterIndex (from Telegram or local confirmed state or fresh)
             val localCatalog = catalogDao.getByChannelId(channelId)
@@ -124,7 +135,69 @@ class MasterIndexManager(
             newManifests.forEach { manifestMap[it.backupId] = it }
             val mergedManifests = manifestMap.values.toList()
 
-            // 4. Merge media records (deduplicating by mediaSha256)
+            // 4. Check manifest sharding threshold (1,000 manifests per shard)
+            val manifestShardsList = baseIndex.manifestShards.toMutableList()
+            var activeManifests = mergedManifests
+            val nextGeneration = baseIndex.generation + 1L
+
+            if (activeManifests.size > ManifestShard.MAX_SHARD_MANIFESTS) {
+                Log.i(TAG, "Active manifests (${activeManifests.size}) exceed max bound (${ManifestShard.MAX_SHARD_MANIFESTS}). Sharding oldest manifests...")
+                val manifestsToShard = activeManifests.take(ManifestShard.MAX_SHARD_MANIFESTS)
+                activeManifests = activeManifests.drop(ManifestShard.MAX_SHARD_MANIFESTS)
+
+                val manifestShardId = "manifest_shard_${nextGeneration}_${System.currentTimeMillis()}"
+                val manifestShard = ManifestShard(
+                    format = ManifestShard.FORMAT_IDENTIFIER,
+                    version = ManifestShard.CURRENT_VERSION,
+                    shardId = manifestShardId,
+                    createdAt = System.currentTimeMillis(),
+                    botId = botId,
+                    channelId = channelId,
+                    itemCount = manifestsToShard.size,
+                    manifests = manifestsToShard
+                )
+                manifestShard.validate()
+
+                val shardBytes = mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(manifestShard)
+                val shardSha256 = ContentHasher.computeHash(shardBytes)
+                val shardFileName = "gallerysync_manifest_shard_${manifestShardId}.json"
+
+                Log.i(TAG, "Uploading manifest shard $shardFileName (${shardBytes.size} bytes, ${manifestsToShard.size} manifests)...")
+                val shardUpload = catalogApi.sendDocument(
+                    botToken = botToken,
+                    channelId = channelId,
+                    fileBytes = shardBytes,
+                    fileName = shardFileName,
+                    mimeType = "application/json",
+                    caption = "GallerySync Manifest Shard $manifestShardId (${manifestsToShard.size} manifests)"
+                )
+
+                val shardRef = when (shardUpload) {
+                    is TelegramCatalogUploadResult.Success -> {
+                        ShardReference(
+                            shardId = manifestShardId,
+                            fileId = shardUpload.fileId,
+                            messageId = shardUpload.messageId,
+                            fileName = shardFileName,
+                            sizeBytes = shardUpload.fileSize,
+                            sha256 = shardSha256,
+                            itemCount = manifestsToShard.size
+                        )
+                    }
+                    is TelegramCatalogUploadResult.RateLimited -> {
+                        return@withContext MasterIndexCommitResult.RateLimited(shardUpload.retryAfterSeconds)
+                    }
+                    else -> {
+                        val desc = (shardUpload as? TelegramCatalogUploadResult.InvalidResponse)?.reason
+                            ?: "Failed to upload manifest shard document"
+                        return@withContext MasterIndexCommitResult.Error(desc, isRetryable = true)
+                    }
+                }
+                manifestShardsList.add(shardRef)
+                Log.i(TAG, "Manifest Shard $manifestShardId committed: fileId=${shardRef.fileId}, messageId=${shardRef.messageId}")
+            }
+
+            // 5. Merge media records (deduplicating by mediaSha256)
             val mediaMap = LinkedHashMap<String, CatalogMediaRecord>()
             baseIndex.activeMediaRecords.forEach {
                 val key = if (it.mediaSha256.isNotBlank()) it.mediaSha256 else it.telegramFileId
@@ -136,9 +209,8 @@ class MasterIndexManager(
             }
             var allActiveRecords = mediaMap.values.toList()
 
-            // 5. Check sharding threshold (1,000 records per shard)
+            // 6. Check sharding threshold (1,000 records per shard)
             val shardsList = baseIndex.shards.toMutableList()
-            val nextGeneration = baseIndex.generation + 1L
 
             if (allActiveRecords.size > CatalogShard.MAX_SHARD_RECORDS) {
                 Log.i(TAG, "Active media records (${allActiveRecords.size}) exceed max bound (${CatalogShard.MAX_SHARD_RECORDS}). Sharding oldest records...")
@@ -197,7 +269,7 @@ class MasterIndexManager(
                 Log.i(TAG, "Shard $shardId committed: fileId=${shardRef.fileId}, messageId=${shardRef.messageId}")
             }
 
-            // 6. Build new MasterIndex
+            // 7. Build new MasterIndex
             val newMasterIndex = MasterIndex(
                 format = MasterIndex.FORMAT_IDENTIFIER,
                 version = MasterIndex.CURRENT_VERSION,
@@ -205,11 +277,12 @@ class MasterIndexManager(
                 updatedAt = System.currentTimeMillis(),
                 botId = botId,
                 channelId = channelId,
-                manifests = mergedManifests,
+                manifests = activeManifests,
+                manifestShards = manifestShardsList,
                 shards = shardsList,
                 activeMediaRecords = allActiveRecords,
                 totalMediaCount = allActiveRecords.size + shardsList.sumOf { it.itemCount },
-                totalManifestCount = mergedManifests.size
+                totalManifestCount = activeManifests.size + manifestShardsList.sumOf { it.itemCount }
             )
             newMasterIndex.validate()
 
@@ -308,6 +381,25 @@ class MasterIndexManager(
             if (processedIds.isNotEmpty()) {
                 pendingDao.markCommitted(processedIds)
                 Log.i(TAG, "Marked ${processedIds.size} pending catalog entries as COMMITTED.")
+            }
+
+            // CRITICAL Phase 10.4.1 Section 2: Commit ChunkedBackup to DONE only AFTER master index confirmation
+            val chunkedBackupDao = database.chunkedBackupDao()
+            val photoDao = database.photoDao()
+            for (manifest in newManifests) {
+                chunkedBackupDao.markBackupDone(manifest.backupId, System.currentTimeMillis())
+                val cb = chunkedBackupDao.getById(manifest.backupId)
+                val targetLocalId = cb?.localId ?: manifest.backupId
+                photoDao.updateUploadStatus(targetLocalId, "DONE")
+                photoDao.updateRemoteIdForLocalId(targetLocalId, "CHUNKED_${manifest.backupId}")
+                Log.i(TAG, "Committed ChunkedBackup ${manifest.backupId} (localId=$targetLocalId) to status DONE.")
+            }
+            for (record in newMediaRecords) {
+                val localId = record.localId
+                if (!localId.isNullOrBlank()) {
+                    photoDao.updateUploadStatus(localId, "DONE")
+                    photoDao.updateRemoteIdForLocalId(localId, record.telegramFileId)
+                }
             }
 
             Log.i(TAG, "🎉 Master index commit completed successfully: Generation $nextGeneration, pinnedMessageId=$newIndexMessageId, indexFileId=$newIndexFileId")
@@ -430,6 +522,129 @@ class MasterIndexManager(
             }
         }
         return records
+    }
+
+    /**
+     * Downloads all manifests across root index and manifest shards.
+     */
+    suspend fun fetchAllManifests(
+        botToken: String,
+        masterIndex: MasterIndex
+    ): List<ManifestReference> {
+        val manifests = mutableListOf<ManifestReference>()
+        manifests.addAll(masterIndex.manifests)
+
+        for (shardRef in masterIndex.manifestShards) {
+            val shardBytes = catalogApi.downloadFileByFileId(botToken, shardRef.fileId).getOrNull()
+            if (shardBytes != null) {
+                try {
+                    val shard = mapper.readValue(shardBytes, ManifestShard::class.java)
+                    shard.validate()
+                    manifests.addAll(shard.manifests)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to parse manifest shard ${shardRef.shardId}: ${e.message}", e)
+                }
+            } else {
+                Log.w(TAG, "Could not download manifest shard ${shardRef.shardId} (fileId=${shardRef.fileId})")
+            }
+        }
+        return manifests
+    }
+
+    /**
+     * Reconciles local database state with the authoritative Telegram pinned master index.
+     * Recovers from crashes during publication stages 2-5 without losing index or duplicating generations.
+     */
+    suspend fun reconcileWithRemoteCatalog(
+        botToken: String,
+        channelId: Long,
+        database: WhDatabase = DbHolder.database
+    ): MasterIndexReconciliationResult = withContext(Dispatchers.IO) {
+        commitMutex.withLock {
+            internalReconcileWithRemoteCatalog(botToken, channelId, database)
+        }
+    }
+
+    private suspend fun internalReconcileWithRemoteCatalog(
+        botToken: String,
+        channelId: Long,
+        database: WhDatabase
+    ): MasterIndexReconciliationResult {
+        val catalogDao = database.backupCatalogDao()
+        val pendingDao = database.pendingCatalogEntryDao()
+        val chunkedBackupDao = database.chunkedBackupDao()
+        val photoDao = database.photoDao()
+
+        val botId = TelegramCatalogApi.extractBotId(botToken)
+        if (botId <= 0L) {
+            return MasterIndexReconciliationResult.Error("Invalid botToken format")
+        }
+
+        val chatInfoResult = catalogApi.getChatInfo(botToken, channelId)
+        val chatInfo = when (chatInfoResult) {
+            is TelegramCatalogResult.Success -> chatInfoResult.value
+            else -> {
+                val desc = (chatInfoResult as? TelegramCatalogResult.InvalidResponse)?.reason ?: "getChat failed"
+                return MasterIndexReconciliationResult.Error(desc)
+            }
+        }
+
+        val pinnedMsg = chatInfo.pinnedMessage
+        val doc = pinnedMsg?.document
+        if (doc == null || !(doc.fileName ?: "").contains("master_index", ignoreCase = true)) {
+            return MasterIndexReconciliationResult.NoRemoteIndex("No pinned master index document found in channel")
+        }
+
+        val remoteIndex = tryDownloadIndexByFileId(botToken, doc.fileId)
+            ?: return MasterIndexReconciliationResult.Error("Failed to download or parse pinned master index")
+
+        val localCatalog = catalogDao.getByChannelId(channelId)
+        val localGen = localCatalog?.lastConfirmedGeneration ?: 0L
+
+        if (remoteIndex.generation <= localGen) {
+            return MasterIndexReconciliationResult.AlreadyUpToDate
+        }
+
+        Log.i(TAG, "Reconciling local catalog (Gen $localGen) with remote pinned master index (Gen ${remoteIndex.generation})...")
+
+        // Update local backup_catalog
+        val catalogEntity = BackupCatalogEntity(
+            channelId = channelId,
+            botId = botId,
+            lastConfirmedGeneration = remoteIndex.generation,
+            pinnedMessageId = pinnedMsg.messageId,
+            indexFileId = doc.fileId,
+            indexSha256 = doc.fileUniqueId ?: "",
+            updatedAt = remoteIndex.updatedAt,
+            syncStatus = "COMMITTED"
+        )
+        catalogDao.insertOrUpdate(catalogEntity)
+
+        // Mark matching pending entries committed & chunked backups DONE
+        val allManifests = fetchAllManifests(botToken, remoteIndex)
+        val manifestBackupIds = allManifests.map { it.backupId }.toSet()
+        val pendingEntries = pendingDao.getPendingEntries()
+        val processedIds = mutableListOf<Long>()
+
+        for (entry in pendingEntries) {
+            if (entry.entryType == PendingCatalogEntry.TYPE_MANIFEST_REFERENCE && entry.referenceId in manifestBackupIds) {
+                processedIds.add(entry.id)
+            }
+        }
+        if (processedIds.isNotEmpty()) {
+            pendingDao.markCommitted(processedIds)
+        }
+
+        for (m in allManifests) {
+            chunkedBackupDao.markBackupDone(m.backupId, remoteIndex.updatedAt)
+            val cb = chunkedBackupDao.getById(m.backupId)
+            val targetLocalId = cb?.localId ?: m.backupId
+            photoDao.updateUploadStatus(targetLocalId, "DONE")
+            photoDao.updateRemoteIdForLocalId(targetLocalId, "CHUNKED_${m.backupId}")
+        }
+
+        Log.i(TAG, "Reconciliation complete: Advanced to Gen ${remoteIndex.generation}, reconciled ${allManifests.size} manifests.")
+        return MasterIndexReconciliationResult.Reconciled(remoteIndex.generation, pinnedMsg.messageId)
     }
 
     companion object {

@@ -242,19 +242,30 @@ object ChunkedBackupRepository {
     }
 
     /**
-     * Called when manifest document is uploaded and pinned in channel (Phase 10.4).
-     * Transitions backup to DONE and records manifest identifiers.
+     * Called when manifest document is uploaded to Telegram.
+     * Transitions backup to MANIFEST_UPLOADED and records manifest identifiers.
      */
     suspend fun recordManifestSuccess(
         backupId: String,
         manifestFileId: String,
         manifestMessageId: Long,
-        completedAt: Long = System.currentTimeMillis(),
         database: WhDatabase = DbHolder.database
     ): Boolean = database.chunkedBackupDao().updateManifestInfo(
         backupId = backupId,
         fileId = manifestFileId,
-        messageId = manifestMessageId,
+        messageId = manifestMessageId
+    ) > 0
+
+    /**
+     * Called when master index containing manifest reference is pinned and confirmed.
+     * Transitions backup to DONE.
+     */
+    suspend fun markBackupDone(
+        backupId: String,
+        completedAt: Long = System.currentTimeMillis(),
+        database: WhDatabase = DbHolder.database
+    ): Boolean = database.chunkedBackupDao().markBackupDone(
+        backupId = backupId,
         completedAt = completedAt
     ) > 0
 

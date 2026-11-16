@@ -1,4 +1,4 @@
-﻿package com.gallerysync.app.ui.main.nav
+package com.gallerysync.app.ui.main.nav
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
@@ -102,7 +102,9 @@ fun AppNavHost(
         composable(route = Screens.LocalPhotos.route) {
             val localPhotos = viewModel.localPhotosFlow.collectAsLazyPagingItems()
             val localPhotosCount by viewModel.localPhotosCount.collectAsStateWithLifecycle()
-            
+            val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+            val refreshError by viewModel.refreshError.collectAsStateWithLifecycle()
+
             // Sync grid position if returning from viewer
             val lastViewedId by viewModel.lastViewedPhotoId.collectAsStateWithLifecycle()
             val allMediaStorePhotos by viewModel.filteredMediaStorePhotos.collectAsStateWithLifecycle()
@@ -115,6 +117,13 @@ fun AppNavHost(
                 localPhotos = localPhotos,
                 totalCount = localPhotosCount,
                 allPhotos = allMediaStorePhotos,
+                isRefreshing = isRefreshing,
+                onRefresh = {
+                    localPhotos.refresh()
+                    viewModel.refreshGallery()
+                },
+                refreshError = refreshError,
+                onClearRefreshError = { viewModel.clearRefreshError() },
                 expanded = expanded,
                 onExpandedChange = onExpandedChange,
                 selectionMode = selectionMode,

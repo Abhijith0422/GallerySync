@@ -9,6 +9,9 @@ import androidx.work.WorkManager
 import com.gallerysync.app.data.localdb.DbHolder
 import com.gallerysync.app.data.localdb.Preferences
 import com.gallerysync.app.data.localdb.entities.Photo
+import com.gallerysync.app.data.localdb.entities.VideoRestorationJob
+import com.gallerysync.app.data.restoration.RestorationStatus
+import com.gallerysync.app.data.restoration.VideoRestorationManager
 import com.gallerysync.app.utils.getBucketNamesForIds
 import com.gallerysync.app.utils.getDateAddedForIds
 import com.gallerysync.app.workers.InstantPhotoUploadWorker
@@ -276,6 +279,34 @@ class ManageUploadsViewModel(
             val count = DbHolder.database.photoDao().releaseAllHoldingToPending()
             Log.i("ManageUploadsVM", "Explicitly released $count holding photos to pending for upload")
             WorkModule.PeriodicBackup.enqueue(type = "manual_backup")
+        }
+    }
+
+    // Video restoration jobs (Phase 10.5)
+    val restorationJobs: StateFlow<List<VideoRestorationJob>> = DbHolder.database.videoRestorationDao()
+        .getAllFlow()
+        .flowOn(Dispatchers.IO)
+        .stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun retryRestoration(restorationId: String) {
+        scope.launch(Dispatchers.IO) {
+            DbHolder.database.videoRestorationDao().updateStatus(restorationId, RestorationStatus.PENDING)
+            WorkModule.VideoRestoration(restorationId).enqueue()
+        }
+    }
+
+    fun cancelRestoration(restorationId: String) {
+        scope.launch(Dispatchers.IO) {
+            WorkModule.VideoRestoration(restorationId).cancel()
+            DbHolder.database.videoRestorationDao().updateStatus(restorationId, RestorationStatus.CANCELLED)
+        }
+    }
+
+    fun deleteRestoration(restorationId: String) {
+        scope.launch(Dispatchers.IO) {
+            WorkModule.VideoRestoration(restorationId).cancel()
+            DbHolder.database.videoRestorationDao().deleteById(restorationId)
+            VideoRestorationManager.defaultInstance.cleanupAllStaging(getApplication(), restorationId)
         }
     }
 

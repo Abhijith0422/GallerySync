@@ -1,9 +1,10 @@
 package com.gallerysync.app.data.localdb.entities
 
 import androidx.room.TypeConverter
+import com.gallerysync.app.data.restoration.RestorationStatus
 
 /**
- * Room type converters for strongly typed chunked backup and chunk status enums.
+ * Room type converters for strongly typed chunked backup, chunk status, and restoration status enums.
  */
 class ChunkConverters {
     @TypeConverter
@@ -21,4 +22,16 @@ class ChunkConverters {
     @TypeConverter
     fun toVideoChunkStatus(value: String?): VideoChunkStatus =
         VideoChunkStatus.fromString(value)
+
+    @TypeConverter
+    fun fromRestorationStatus(status: RestorationStatus?): String =
+        (status ?: RestorationStatus.PENDING).name
+
+    @TypeConverter
+    fun toRestorationStatus(value: String?): RestorationStatus =
+        try {
+            if (value != null) RestorationStatus.valueOf(value) else RestorationStatus.PENDING
+        } catch (_: Exception) {
+            RestorationStatus.PENDING
+        }
 }

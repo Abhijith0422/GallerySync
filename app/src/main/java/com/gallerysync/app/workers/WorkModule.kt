@@ -268,6 +268,35 @@ object WorkModule {
         }
     }
 
+    class VideoRestoration(private val restorationId: String) {
+        private val constraints: Constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        private val restorationRequest =
+            OneTimeWorkRequestBuilder<VideoRestorationWorker>()
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .setInputData(
+                    workDataOf(
+                        VideoRestorationWorker.KEY_RESTORATION_ID to restorationId
+                    )
+                )
+                .setConstraints(constraints)
+                .build()
+
+        fun enqueue() {
+            manager.enqueueUniqueWork(
+                "$RESTORATION_WORK_PREFIX:$restorationId",
+                ExistingWorkPolicy.KEEP,
+                restorationRequest
+            )
+        }
+
+        fun cancel() {
+            manager.cancelUniqueWork("$RESTORATION_WORK_PREFIX:$restorationId")
+        }
+    }
+
     object PeriodicDbExport {
 
         private val repeatIntervalDays = Preferences.getString(
@@ -450,6 +479,7 @@ object WorkModule {
     const val DAILY_DATABASE_BACKUP_WORK = "DailyDatabaseBackupWork"
     const val UPLOADING_ID = "UploadingId"
     const val DOWNLOADING_ID = "DownloadingId"
+    const val RESTORATION_WORK_PREFIX = "video_restoration"
     
     val VERBOSE_NOTIFICATION_CHANNEL_NAME: CharSequence = "Verbose WorkManager Notifications"
     const val VERBOSE_NOTIFICATION_CHANNEL_DESCRIPTION = "Shows notifications whenever work starts"
@@ -462,6 +492,7 @@ object WorkModule {
     const val NOTIFICATION_ID_DOWNLOAD = 103
     const val NOTIFICATION_ID_UPLOAD = 104
     const val NOTIFICATION_ID_EXPORT = 105
+    const val NOTIFICATION_ID_RESTORATION = 106
     const val NOTIFICATION_ID_GENERIC = 100
     
     @Deprecated("Use unique IDs instead")

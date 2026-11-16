@@ -277,9 +277,10 @@ object InstallRecoveryManager {
         val videoChunkDao = database.videoChunkDao()
         val catalogDao = database.backupCatalogDao()
 
-        // 4. Download and recover chunked backup manifests
+        // 4. Download and recover chunked backup manifests (root + manifest shards)
         var manifestsRecovered = 0
-        for (manifestRef in masterIndex.manifests) {
+        val allManifests = indexManager.fetchAllManifests(botToken, masterIndex)
+        for (manifestRef in allManifests) {
             try {
                 val manifestBytes = catalogApi.downloadFileByFileId(botToken, manifestRef.fileId).getOrNull()
                 if (manifestBytes != null) {

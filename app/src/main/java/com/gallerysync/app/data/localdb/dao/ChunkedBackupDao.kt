@@ -52,11 +52,16 @@ interface ChunkedBackupDao {
     @Query("UPDATE chunked_backups SET fileSha256 = :sha256 WHERE backupId = :backupId")
     suspend fun updateFileSha256(backupId: String, sha256: String): Int
 
-    @Query("UPDATE chunked_backups SET manifestFileId = :fileId, manifestMessageId = :messageId, completedAt = :completedAt, status = 'DONE', lastError = NULL WHERE backupId = :backupId")
+    @Query("UPDATE chunked_backups SET manifestFileId = :fileId, manifestMessageId = :messageId, status = 'MANIFEST_UPLOADED', lastError = NULL WHERE backupId = :backupId")
     suspend fun updateManifestInfo(
         backupId: String,
         fileId: String,
-        messageId: Long,
+        messageId: Long
+    ): Int
+
+    @Query("UPDATE chunked_backups SET status = 'DONE', completedAt = :completedAt, lastError = NULL WHERE backupId = :backupId")
+    suspend fun markBackupDone(
+        backupId: String,
         completedAt: Long = System.currentTimeMillis()
     ): Int
 

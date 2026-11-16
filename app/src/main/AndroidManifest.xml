@@ -48,6 +48,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".validation.LiveCatalogValidationReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.gallerysync.app.VALIDATE_CATALOG" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

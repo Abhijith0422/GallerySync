@@ -14,10 +14,11 @@ data class MasterIndex(
     @param:JsonProperty("bot_id") @get:JsonProperty("bot_id") val botId: Long = 0L,
     @param:JsonProperty("channel_id") @get:JsonProperty("channel_id") val channelId: Long = 0L,
     @param:JsonProperty("manifests") @get:JsonProperty("manifests") val manifests: List<ManifestReference> = emptyList(),
+    @param:JsonProperty("manifest_shards") @get:JsonProperty("manifest_shards") val manifestShards: List<ShardReference> = emptyList(),
     @param:JsonProperty("shards") @get:JsonProperty("shards") val shards: List<ShardReference> = emptyList(),
     @param:JsonProperty("active_media_records") @get:JsonProperty("active_media_records") val activeMediaRecords: List<CatalogMediaRecord> = emptyList(),
     @param:JsonProperty("total_media_count") @get:JsonProperty("total_media_count") val totalMediaCount: Int = activeMediaRecords.size + shards.sumOf { it.itemCount },
-    @param:JsonProperty("total_manifest_count") @get:JsonProperty("total_manifest_count") val totalManifestCount: Int = manifests.size
+    @param:JsonProperty("total_manifest_count") @get:JsonProperty("total_manifest_count") val totalManifestCount: Int = manifests.size + manifestShards.sumOf { it.itemCount }
 ) {
     fun validate() {
         check(format == FORMAT_IDENTIFIER) { "Invalid master index format: $format" }
@@ -31,6 +32,7 @@ data class MasterIndex(
         const val FORMAT_IDENTIFIER = "gallerysync_master_index"
         const val CURRENT_VERSION = 1
         const val DEFAULT_INDEX_FILE_NAME = "gallerysync_master_index.json"
+        const val MAX_ROOT_MANIFESTS = 1000
     }
 }
 
@@ -98,5 +100,33 @@ data class CatalogShard(
         const val FORMAT_IDENTIFIER = "gallerysync_catalog_shard"
         const val CURRENT_VERSION = 1
         const val MAX_SHARD_RECORDS = 1000 // 1,000 records per shard (~250 KB)
+    }
+}
+
+@Keep
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class ManifestShard(
+    @param:JsonProperty("format") @get:JsonProperty("format") val format: String = FORMAT_IDENTIFIER,
+    @param:JsonProperty("version") @get:JsonProperty("version") val version: Int = CURRENT_VERSION,
+    @param:JsonProperty("shard_id") @get:JsonProperty("shard_id") val shardId: String = "",
+    @param:JsonProperty("created_at") @get:JsonProperty("created_at") val createdAt: Long = System.currentTimeMillis(),
+    @param:JsonProperty("bot_id") @get:JsonProperty("bot_id") val botId: Long = 0L,
+    @param:JsonProperty("channel_id") @get:JsonProperty("channel_id") val channelId: Long = 0L,
+    @param:JsonProperty("item_count") @get:JsonProperty("item_count") val itemCount: Int = manifests.size,
+    @param:JsonProperty("manifests") @get:JsonProperty("manifests") val manifests: List<ManifestReference> = emptyList()
+) {
+    fun validate() {
+        check(format == FORMAT_IDENTIFIER) { "Invalid manifest shard format: $format" }
+        check(version == CURRENT_VERSION) { "Unsupported manifest shard version: $version" }
+        check(shardId.isNotBlank()) { "shard_id cannot be blank" }
+        check(botId > 0L) { "bot_id must be positive: $botId" }
+        check(channelId != 0L) { "channel_id cannot be 0" }
+        check(manifests.isNotEmpty()) { "Manifest shard manifests cannot be empty" }
+    }
+
+    companion object {
+        const val FORMAT_IDENTIFIER = "gallerysync_manifest_shard"
+        const val CURRENT_VERSION = 1
+        const val MAX_SHARD_MANIFESTS = 1000 // 1,000 manifests per shard (~150 KB)
     }
 }
