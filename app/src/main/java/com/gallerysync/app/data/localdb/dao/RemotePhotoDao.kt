@@ -1,4 +1,4 @@
-﻿package com.gallerysync.app.data.localdb.dao
+package com.gallerysync.app.data.localdb.dao
 
 import androidx.annotation.Keep
 import androidx.paging.PagingSource
@@ -110,4 +110,7 @@ interface RemotePhotoDao {
 
     @Query("SELECT topicId FROM remote_photos WHERE topicName = :topicName AND topicId IS NOT NULL AND status = 'ACTIVE' LIMIT 1")
     suspend fun getTopicIdByName(topicName: String): Long?
+
+    @Query("SELECT remoteId FROM remote_photos WHERE status = 'ACTIVE' AND topicName = :topicName")
+    suspend fun getRemoteIdsByTopicName(topicName: String): List<String>
 }

@@ -133,7 +133,13 @@ fun AppNavHost(
                 deletedPhotoIds = deletedPhotoIds,
                 albums = albums,
                 selectedAlbumId = selectedAlbumId,
-                onAlbumSelected = { viewModel.selectAlbum(it) },
+                onAlbumSelected = {
+                    if (selectionMode) {
+                        onSelectedPhotosChange(emptySet())
+                        onSelectionModeChange(false)
+                    }
+                    viewModel.selectAlbum(it)
+                },
                 navController = navController,
                 sharedTransitionScope = sharedTransitionScope,
                 animatedVisibilityScope = this@composable,
@@ -165,7 +171,13 @@ fun AppNavHost(
                 },
                 topicAlbums = topicAlbums,
                 selectedTopicAlbumId = selectedTopicAlbumId,
-                onTopicAlbumSelected = { viewModel.selectTopicAlbum(it) },
+                onTopicAlbumSelected = {
+                    if (selectionMode) {
+                        onSelectedPhotosChange(emptySet())
+                        onSelectionModeChange(false)
+                    }
+                    viewModel.selectTopicAlbum(it)
+                },
                 expanded = expanded,
                 onExpandedChange = onExpandedChange,
                 selectionMode = selectionMode,

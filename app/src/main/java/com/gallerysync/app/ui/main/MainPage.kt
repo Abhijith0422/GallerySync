@@ -121,56 +121,109 @@ fun MainPage(viewModel: MainViewModel = screenScopedViewModel()) {
     val deletedPhotosCount by DbHolder.database.remotePhotoDao().getDeletedCountFlow()
         .collectAsStateWithLifecycle(initialValue = 0)
 
-    val photoCounts = listOf(localPhotosCount, cloudPhotosCount)
+    val selectedAlbumId by viewModel.selectedAlbumId.collectAsStateWithLifecycle()
+    val filteredLocalPhotos by viewModel.filteredMediaStorePhotos.collectAsStateWithLifecycle()
+    val albums by viewModel.albums.collectAsStateWithLifecycle()
+    val selectedTopicAlbumId by viewModel.selectedTopicAlbumId.collectAsStateWithLifecycle()
+    val topicAlbums by viewModel.topicAlbums.collectAsStateWithLifecycle()
+
+    val currentActiveLocalCount = remember(selectedAlbumId, filteredLocalPhotos, localPhotosCount) {
+        if (selectedAlbumId == -1L) localPhotosCount
+        else filteredLocalPhotos.size
+    }
+
+    val photoCounts = listOf(currentActiveLocalCount, cloudPhotosCount)
 
     val localPhotos = viewModel.localPhotosFlow.collectAsLazyPagingItems()
     val allCloudPhotos = viewModel.allCloudPhotosFlow.collectAsLazyPagingItems()
 
-    val areAllSelected = remember(selectedPhotos, currentRoute, localPhotosCount, cloudPhotosCount, deletedPhotosCount) {
-        val totalCount = when (currentRoute) {
-            Screens.LocalPhotos.route -> localPhotosCount
-            Screens.TrashBin.route -> deletedPhotosCount
-            else -> cloudPhotosCount
+    val areAllSelected = remember(
+        selectedPhotos,
+        currentRoute,
+        localPhotosCount,
+        cloudPhotosCount,
+        deletedPhotosCount,
+        selectedAlbumId,
+        filteredLocalPhotos,
+        selectedTopicAlbumId
+    ) {
+        when (currentRoute) {
+            Screens.LocalPhotos.route -> {
+                if (selectedAlbumId == -1L) {
+                    localPhotosCount > 0 && selectedPhotos.size >= localPhotosCount
+                } else {
+                    filteredLocalPhotos.isNotEmpty() && filteredLocalPhotos.all { it.localId in selectedPhotos }
+                }
+            }
+            Screens.TrashBin.route -> {
+                deletedPhotosCount > 0 && selectedPhotos.size >= deletedPhotosCount
+            }
+            else -> {
+                cloudPhotosCount > 0 && selectedPhotos.size >= cloudPhotosCount
+            }
         }
-        if (com.gallerysync.app.BuildConfig.DEBUG) {
-             Log.d("MainPage", "Selection Debug: selected=${selectedPhotos.size}, total=$totalCount, route=$currentRoute")
-        }
-        // Use strict equality for areAllSelected to ensure toggle behavior is consistent
-        // If selected count >= total count, we consider it all selected.
-        // However, for the toggle to work "select all -> deselect all", we need to ensure
-        // that if it returns true, the next click clears selection.
-        totalCount > 0 && selectedPhotos.size >= totalCount
     }
 
     fun toggleSelectAll() {
         if (areAllSelected) {
-            clearSelection()
+            if (currentRoute == Screens.LocalPhotos.route && selectedAlbumId != -1L) {
+                val currentAlbumIds = filteredLocalPhotos.map { it.localId }.toSet()
+                selectedPhotos = selectedPhotos - currentAlbumIds
+                if (selectedPhotos.isEmpty()) {
+                    clearSelection()
+                }
+            } else {
+                clearSelection()
+            }
         } else {
             if (currentRoute == Screens.LocalPhotos.route) {
-                scope.launch(Dispatchers.IO) {
-                    val allLocalIds = DbHolder.database.photoDao().getAllLocalIds()
-                    withContext(Dispatchers.Main) {
-                        selectedPhotos = allLocalIds.toSet()
+                if (selectedAlbumId == -1L) {
+                    scope.launch(Dispatchers.IO) {
+                        val allLocalIds = DbHolder.database.photoDao().getAllLocalIds()
+                        withContext(Dispatchers.Main) {
+                            selectedPhotos = allLocalIds.toSet()
+                        }
                     }
+                } else {
+                    // Only select the photos under the currently selected album chip (e.g. Camera)
+                    val currentAlbumIds = filteredLocalPhotos.map { it.localId }.toSet()
+                    selectedPhotos = selectedPhotos + currentAlbumIds
                 }
             } else if (currentRoute == Screens.TrashBin.route) {
                 scope.launch(Dispatchers.IO) {
-                    val allDeleted = DbHolder.database.remotePhotoDao().getAllRemoteIds()
-                    // Note: getDeletedFlow returns soft-deleted items; for select-all we need IDs of deleted items
-                    // We'll gather them from the trash view model flow or query directly
-                    val deletedRemote = DbHolder.database.remotePhotoDao().getAllIncludingDeleted()
+                    val allDeleted = DbHolder.database.remotePhotoDao().getAllIncludingDeleted()
                         .filter { it.status == "DELETED" }
                         .map { it.remoteId }.toSet()
                     withContext(Dispatchers.Main) {
-                        selectedPhotos = deletedRemote
+                        selectedPhotos = allDeleted
                     }
                 }
             } else {
                 // Remote photos
-                scope.launch(Dispatchers.IO) {
-                    val allRemoteIds = DbHolder.database.remotePhotoDao().getAllRemoteIds()
-                    withContext(Dispatchers.Main) {
-                        selectedPhotos = allRemoteIds.toSet()
+                if (selectedTopicAlbumId == -1L) {
+                    scope.launch(Dispatchers.IO) {
+                        val allRemoteIds = DbHolder.database.remotePhotoDao().getAllRemoteIds()
+                        withContext(Dispatchers.Main) {
+                            selectedPhotos = allRemoteIds.toSet()
+                        }
+                    }
+                } else {
+                    val currentAlbums = viewModel.topicAlbums.value
+                    val topicName = currentAlbums.find { it.id == selectedTopicAlbumId }?.label
+                    if (topicName != null && topicName != "All") {
+                        scope.launch(Dispatchers.IO) {
+                            val topicRemoteIds = DbHolder.database.remotePhotoDao().getRemoteIdsByTopicName(topicName)
+                            withContext(Dispatchers.Main) {
+                                selectedPhotos = topicRemoteIds.toSet()
+                            }
+                        }
+                    } else {
+                        scope.launch(Dispatchers.IO) {
+                            val allRemoteIds = DbHolder.database.remotePhotoDao().getAllRemoteIds()
+                            withContext(Dispatchers.Main) {
+                                selectedPhotos = allRemoteIds.toSet()
+                            }
+                        }
                     }
                 }
             }
@@ -330,62 +383,72 @@ fun MainPage(viewModel: MainViewModel = screenScopedViewModel()) {
 
 
                                                 )
-                                                // Show total size if available
+                                                // Show total size and count if available
                                                 val context = LocalContext.current
                                                 val localViewModel: LocalViewModel = screenScopedViewModel()
                                                 val remoteViewModel: RemoteViewModel = screenScopedViewModel()
                                                 val trashViewModel: TrashViewModel = screenScopedViewModel()
                                                 
                                                 val totalSize = when (currentRoute) {
-                                                    Screens.LocalPhotos.route -> localViewModel.totalSize.collectAsStateWithLifecycle().value ?: 0L
+                                                    Screens.LocalPhotos.route -> {
+                                                        if (selectedAlbumId == -1L) {
+                                                            localViewModel.totalSize.collectAsStateWithLifecycle().value ?: 0L
+                                                        } else {
+                                                            filteredLocalPhotos.sumOf { it.size }
+                                                        }
+                                                    }
                                                     Screens.RemotePhotos.route -> remoteViewModel.totalSize.collectAsStateWithLifecycle().value ?: 0L
                                                     Screens.TrashBin.route -> trashViewModel.totalSize.collectAsStateWithLifecycle().value ?: 0L
                                                     else -> 0L
                                                 }
                                                 
-                                                if (totalSize > 0) {
-                                                    val count = when (currentRoute) {
-                                                        Screens.LocalPhotos.route -> localPhotosCount
-                                                        Screens.RemotePhotos.route -> cloudPhotosCount
-                                                        Screens.TrashBin.route -> if (currentRoute == Screens.TrashBin.route) {
-                                                            trashViewModel.deletedPhotosFlow.collectAsLazyPagingItems().itemCount
-                                                        } else 0
-                                                        else -> 0
+                                                val count = when (currentRoute) {
+                                                    Screens.LocalPhotos.route -> currentActiveLocalCount
+                                                    Screens.RemotePhotos.route -> {
+                                                        if (selectedTopicAlbumId == -1L) cloudPhotosCount
+                                                        else topicAlbums.find { it.id == selectedTopicAlbumId }?.count ?: cloudPhotosCount
                                                     }
-                                                    
-                                                    
-                                                Row(
-                                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    modifier = Modifier.padding(start = 2.dp).offset(y = (-2).dp)
-                                                ) {
-                                                    Surface(
-                                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
-                                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                        shape = CircleShape
-                                                    ) {
-                                                        Text(
-                                                            text = "$count photos",
-                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                                            style = MaterialTheme.typography.labelMedium,
-                                                            fontWeight = FontWeight.ExtraBold,
-                                                            letterSpacing = 0.2.sp
-                                                        )
-                                                    }
-                                                    Surface(
-                                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
-                                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                        shape = CircleShape
-                                                    ) {
-                                                        Text(
-                                                            text = android.text.format.Formatter.formatFileSize(context, totalSize),
-                                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
-                                                            style = MaterialTheme.typography.labelMedium,
-                                                            fontWeight = FontWeight.ExtraBold,
-                                                            letterSpacing = 0.2.sp
-                                                        )
-                                                    }
+                                                    Screens.TrashBin.route -> if (currentRoute == Screens.TrashBin.route) {
+                                                        trashViewModel.deletedPhotosFlow.collectAsLazyPagingItems().itemCount
+                                                    } else 0
+                                                    else -> 0
                                                 }
+                                                
+                                                if (totalSize > 0 || count > 0) {
+                                                    Row(
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        modifier = Modifier.padding(start = 2.dp).offset(y = (-2).dp)
+                                                    ) {
+                                                        Surface(
+                                                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                                                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                            shape = CircleShape
+                                                        ) {
+                                                            Text(
+                                                                text = "$count photos",
+                                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                                                style = MaterialTheme.typography.labelMedium,
+                                                                fontWeight = FontWeight.ExtraBold,
+                                                                letterSpacing = 0.2.sp
+                                                            )
+                                                        }
+                                                        if (totalSize > 0) {
+                                                            Surface(
+                                                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                                                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                                shape = CircleShape
+                                                            ) {
+                                                                Text(
+                                                                    text = android.text.format.Formatter.formatFileSize(context, totalSize),
+                                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp),
+                                                                    style = MaterialTheme.typography.labelMedium,
+                                                                    fontWeight = FontWeight.ExtraBold,
+                                                                    letterSpacing = 0.2.sp
+                                                                )
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         },
