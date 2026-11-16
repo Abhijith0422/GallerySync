@@ -448,7 +448,7 @@ fun getBucketName(contentResolver: android.content.ContentResolver, uri: android
 
 /**
  * Batch-resolves BUCKET_DISPLAY_NAME for multiple MediaStore media IDs (both images and videos).
- * Uses a single query with an IN clause on MediaStore.Files for efficiency.
+ * Uses chunked queries (max 500 IDs per batch) to avoid SQLite parameter limit exceptions.
  * Returns a map of ID string -> bucket name.
  */
 fun getBucketNamesForIds(contentResolver: android.content.ContentResolver, ids: List<Long>): Map<String, String> {
@@ -458,29 +458,31 @@ fun getBucketNamesForIds(contentResolver: android.content.ContentResolver, ids: 
         android.provider.MediaStore.MediaColumns._ID,
         android.provider.MediaStore.MediaColumns.BUCKET_DISPLAY_NAME
     )
-    val placeholders = ids.joinToString(",") { "?" }
-    val selection = "${android.provider.MediaStore.MediaColumns._ID} IN ($placeholders)"
-    val selectionArgs = ids.map { it.toString() }.toTypedArray()
     val result = mutableMapOf<String, String>()
-    try {
-        contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
-            val idIdx = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns._ID)
-            val nameIdx = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
-            while (cursor.moveToNext()) {
-                val id = cursor.getLong(idIdx).toString()
-                val name = cursor.getString(nameIdx) ?: ""
-                result[id] = name
+    ids.chunked(500).forEach { chunk ->
+        val placeholders = chunk.joinToString(",") { "?" }
+        val selection = "${android.provider.MediaStore.MediaColumns._ID} IN ($placeholders)"
+        val selectionArgs = chunk.map { it.toString() }.toTypedArray()
+        try {
+            contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
+                val idIdx = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns._ID)
+                val nameIdx = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idIdx).toString()
+                    val name = cursor.getString(nameIdx) ?: ""
+                    result[id] = name
+                }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to batch resolve bucket names for ${chunk.size} IDs", e)
         }
-    } catch (e: Exception) {
-        Log.e(TAG, "Failed to batch resolve bucket names for ${ids.size} IDs", e)
     }
     return result
 }
 
 /**
  * Batch-resolves DATE_ADDED (epoch seconds) for multiple MediaStore media IDs (both images and videos).
- * Uses a single query on MediaStore.Files for efficiency.
+ * Uses chunked queries (max 500 IDs per batch) to avoid SQLite parameter limit exceptions.
  * Returns a map of ID string -> dateAdded in milliseconds.
  */
 fun getDateAddedForIds(contentResolver: android.content.ContentResolver, ids: List<Long>): Map<String, Long> {
@@ -490,23 +492,25 @@ fun getDateAddedForIds(contentResolver: android.content.ContentResolver, ids: Li
         android.provider.MediaStore.MediaColumns._ID,
         android.provider.MediaStore.MediaColumns.DATE_ADDED
     )
-    val placeholders = ids.joinToString(",") { "?" }
-    val selection = "${android.provider.MediaStore.MediaColumns._ID} IN ($placeholders)"
-    val selectionArgs = ids.map { it.toString() }.toTypedArray()
     val result = mutableMapOf<String, Long>()
-    try {
-        contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
-            val idIdx = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns._ID)
-            val dateIdx = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_ADDED)
-            while (cursor.moveToNext()) {
-                val id = cursor.getLong(idIdx).toString()
-                val dateAddedSecs = cursor.getLong(dateIdx)
-                // DATE_ADDED is in seconds, convert to millis
-                result[id] = dateAddedSecs * 1000L
+    ids.chunked(500).forEach { chunk ->
+        val placeholders = chunk.joinToString(",") { "?" }
+        val selection = "${android.provider.MediaStore.MediaColumns._ID} IN ($placeholders)"
+        val selectionArgs = chunk.map { it.toString() }.toTypedArray()
+        try {
+            contentResolver.query(uri, projection, selection, selectionArgs, null)?.use { cursor ->
+                val idIdx = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns._ID)
+                val dateIdx = cursor.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_ADDED)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idIdx).toString()
+                    val dateAddedSecs = cursor.getLong(dateIdx)
+                    // DATE_ADDED is in seconds, convert to millis
+                    result[id] = dateAddedSecs * 1000L
+                }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to batch resolve dateAdded for ${chunk.size} IDs", e)
         }
-    } catch (e: Exception) {
-        Log.e(TAG, "Failed to batch resolve dateAdded for ${ids.size} IDs", e)
     }
     return result
 }

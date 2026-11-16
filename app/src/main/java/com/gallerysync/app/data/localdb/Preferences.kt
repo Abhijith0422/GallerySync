@@ -282,7 +282,7 @@ object Preferences {
     fun getExcludedBucketNames(): Set<String> = getStringSet(excludedBucketNamesKey, emptySet())
 
     fun setExcludedBucketNames(names: Set<String>) {
-        edit { putStringSet(excludedBucketNamesKey, names) }
+        edit { putStringSet(excludedBucketNamesKey, HashSet(names)) }
     }
 
     fun getSyncMode(): String = getString(syncModeKey, SYNC_MODE_ALL)

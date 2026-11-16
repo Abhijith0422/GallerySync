@@ -874,7 +874,7 @@ fun SettingsScreen(modifier: Modifier = Modifier.clip(RoundedCornerShape(32.dp))
                 color = MaterialTheme.colorScheme.surfaceContainerLow
             ) {
                 var showExcludedDialog by remember { mutableStateOf(false) }
-                val excludedCount = remember { Preferences.getExcludedBucketNames().size }
+                val excludedCount = remember(showExcludedDialog) { Preferences.getExcludedBucketNames().size }
                 SettingsItem(
                     icon = Icons.Rounded.FolderOff,
                     title = "Exclude Folders",
@@ -1274,8 +1274,8 @@ private fun ManageExcludedFoldersDialog(
                     Text("No albums found on this device.")
                 }
                 else -> {
-                    val sortedAlbums = remember(albums, excludedNames) {
-                        albums.sortedByDescending { it.label in excludedNames }
+                    val sortedAlbums = remember(albums) {
+                        albums.sortedBy { it.label.lowercase() }
                     }
                     Column(
                         modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())
