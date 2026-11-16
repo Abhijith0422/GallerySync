@@ -1,4 +1,4 @@
-﻿package com.gallerysync.app.ui.main
+package com.gallerysync.app.ui.main
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.text.input.KeyboardType
 import com.gallerysync.app.utils.toastFromMainThread
