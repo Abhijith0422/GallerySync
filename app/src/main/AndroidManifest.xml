@@ -51,6 +51,7 @@
 
         <receiver
             android:name=".validation.LiveCatalogValidationReceiver"
+            android:permission="android.permission.DUMP"
             android:exported="true">
             <intent-filter>
                 <action android:name="com.gallerysync.app.VALIDATE_CATALOG" />
@@ -59,11 +60,13 @@
 
         <receiver
             android:name=".validation.LiveRestorationValidationReceiver"
+            android:permission="android.permission.DUMP"
             android:exported="true">
             <intent-filter>
                 <action android:name="com.gallerysync.app.VALIDATE_RESTORATION" />
                 <action android:name="com.gallerysync.app.VALIDATE_10_5_1_AUDIT" />
                 <action android:name="com.gallerysync.app.VALIDATE_10_6_E2E" />
+                <action android:name="com.gallerysync.app.VALIDATE_10_7_AUDIT" />
             </intent-filter>
         </receiver>
     </application>

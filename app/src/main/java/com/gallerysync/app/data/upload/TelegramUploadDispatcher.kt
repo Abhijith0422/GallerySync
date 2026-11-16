@@ -95,31 +95,43 @@ object TelegramUploadDispatcher {
     }
 
     /**
+     * Sanitizes sensitive bot tokens and API credentials from error messages before logging or displaying.
+     */
+    fun sanitizeErrorMessage(message: String?): String {
+        if (message.isNullOrBlank()) return "Unknown upload failure"
+        return message
+            .replace(Regex("/bot[^/\\s]+"), "/bot[REDACTED]")
+            .replace(Regex("\\b\\d{8,11}:[A-Za-z0-9_-]{20,50}\\b"), "[REDACTED_BOT_TOKEN]")
+    }
+
+    /**
      * Maps HTTP status codes and exceptions to structured [UploadError].
      */
     fun classifyError(e: Throwable?, responseCode: Int? = null, errorBody: String? = null): UploadError {
         if (e is UploadError) return e
-        if (e is FileNotFoundException) return UploadError.SourceMissing(e.message ?: "File not found")
+        val safeMessage = sanitizeErrorMessage(e?.message)
+        if (e is FileNotFoundException) return UploadError.SourceMissing(safeMessage)
         if (e is java.net.UnknownHostException || e is java.net.SocketTimeoutException || e is java.net.ConnectException) {
-            return UploadError.NetworkUnavailable(e.message ?: "Network unreachable", e)
+            return UploadError.NetworkUnavailable(safeMessage, e)
         }
 
         if (responseCode != null) {
+            val safeErrorBody = sanitizeErrorMessage(errorBody)
             when {
                 responseCode == 429 -> {
                     val retryAfter = parseRetryAfter(errorBody) ?: 30
                     return UploadError.RateLimited(retryAfter)
                 }
                 responseCode in 500..599 -> return UploadError.ServerError(responseCode)
-                responseCode == 401 || responseCode == 403 -> return UploadError.InvalidCredentials(responseCode, errorBody ?: "Unauthorized")
+                responseCode == 401 || responseCode == 403 -> return UploadError.InvalidCredentials(responseCode, safeErrorBody)
                 responseCode == 400 && errorBody?.contains("file is too big", ignoreCase = true) == true -> {
-                    return UploadError.FileExceedsLimit(0L, errorBody)
+                    return UploadError.FileExceedsLimit(0L, safeErrorBody)
                 }
-                else -> return UploadError.ApiError(responseCode, errorBody ?: "HTTP $responseCode")
+                else -> return UploadError.ApiError(responseCode, safeErrorBody)
             }
         }
 
-        return UploadError.ApiError(0, e?.message ?: "Unknown upload failure")
+        return UploadError.ApiError(0, safeMessage)
     }
 
     private fun parseRetryAfter(errorBody: String?): Int? {
