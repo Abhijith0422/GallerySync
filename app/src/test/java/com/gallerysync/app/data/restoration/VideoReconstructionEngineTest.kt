@@ -296,4 +296,77 @@ class VideoReconstructionEngineTest {
         assertFalse(outputFile.exists())
         assertFalse(File(outputFile.parentFile, "${outputFile.name}.part").exists())
     }
+
+    @Test
+    fun productionChunkSize_16MiB_plusNonUniformFinalChunk_exactReconstruction(): Unit = runBlocking {
+        // Chunk 0: Exactly 16 MiB (16,777,216 bytes)
+        val c0Size = 16 * 1024 * 1024L
+        // Chunk 1: Non-uniform 1 MiB (1,048,576 bytes)
+        val c1Size = 1 * 1024 * 1024L
+        val totalSize = c0Size + c1Size
+
+        val c0File = tempFolder.newFile("c0_16mib.bin")
+        val c1File = tempFolder.newFile("c1_1mib.bin")
+        val outputFile = File(tempFolder.root, "out_17mib.mp4")
+
+        val digest0 = MessageDigest.getInstance("SHA-256")
+        val digest1 = MessageDigest.getInstance("SHA-256")
+        val fullDigest = MessageDigest.getInstance("SHA-256")
+
+        val buf = ByteArray(64 * 1024)
+        for (i in buf.indices) buf[i] = (i % 251).toByte()
+
+        // Stream 16 MiB into c0
+        FileOutputStream(c0File).use { out ->
+            var written = 0L
+            while (written < c0Size) {
+                val toWrite = minOf(buf.size.toLong(), c0Size - written).toInt()
+                out.write(buf, 0, toWrite)
+                digest0.update(buf, 0, toWrite)
+                fullDigest.update(buf, 0, toWrite)
+                written += toWrite
+            }
+        }
+
+        // Fill different pattern for c1
+        for (i in buf.indices) buf[i] = ((i + 7) % 251).toByte()
+
+        // Stream 1 MiB into c1
+        FileOutputStream(c1File).use { out ->
+            var written = 0L
+            while (written < c1Size) {
+                val toWrite = minOf(buf.size.toLong(), c1Size - written).toInt()
+                out.write(buf, 0, toWrite)
+                digest1.update(buf, 0, toWrite)
+                fullDigest.update(buf, 0, toWrite)
+                written += toWrite
+            }
+        }
+
+        val sha0 = digest0.digest().joinToString("") { "%02x".format(it) }
+        val sha1 = digest1.digest().joinToString("") { "%02x".format(it) }
+        val fullSha = fullDigest.digest().joinToString("") { "%02x".format(it) }
+
+        val descriptors = listOf(
+            ManifestChunkDescriptor(0, 0L, c0Size, c0Size, sha0, "f0", 101L),
+            ManifestChunkDescriptor(1, c0Size, totalSize, c1Size, sha1, "f1", 102L)
+        )
+
+        val startReconTime = System.currentTimeMillis()
+        val result = engine.reconstruct(
+            chunkFiles = mapOf(0 to c0File, 1 to c1File),
+            chunkDescriptors = descriptors,
+            expectedTotalSize = totalSize,
+            expectedFullSha256 = fullSha,
+            outputFile = outputFile
+        )
+        val reconDurationMs = System.currentTimeMillis() - startReconTime
+
+        assertTrue("Expected Success but was: $result", result is ReconstructionResult.Success)
+        val success = result as ReconstructionResult.Success
+        assertEquals(totalSize, success.totalBytes)
+        assertEquals(fullSha, success.fullSha256)
+        assertEquals(totalSize, outputFile.length())
+        android.util.Log.i("ReconstructionTest", "Reconstructed 17 MiB file in ${reconDurationMs}ms")
+    }
 }

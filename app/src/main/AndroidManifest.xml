@@ -56,6 +56,15 @@
                 <action android:name="com.gallerysync.app.VALIDATE_CATALOG" />
             </intent-filter>
         </receiver>
+
+        <receiver
+            android:name=".validation.LiveRestorationValidationReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.gallerysync.app.VALIDATE_RESTORATION" />
+                <action android:name="com.gallerysync.app.VALIDATE_10_5_1_AUDIT" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

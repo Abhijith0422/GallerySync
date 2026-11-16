@@ -133,6 +133,7 @@ fun PhotoView(
     // Video restoration state for cloud videos (Phase 10.5)
     var activeRestorationJobId by rememberSaveable { mutableStateOf<String?>(null) }
     var activeRestorationJob by remember { mutableStateOf<VideoRestorationJob?>(null) }
+    var isDirectOverHostedLimit by remember { mutableStateOf(false) }
 
     androidx.compose.runtime.LaunchedEffect(photo.localId, photo.remoteId, activeRestorationJobId) {
         val backupId = if (photo.remoteId?.startsWith("CHUNKED_") == true) {
@@ -140,9 +141,9 @@ fun PhotoView(
         } else {
             photo.localId.takeIf { it.isNotBlank() }
         }
-        val existingJob = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val (existingJob, overLimit) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             val dao = DbHolder.database.videoRestorationDao()
-            if (activeRestorationJobId != null) {
+            val job = if (activeRestorationJobId != null) {
                 dao.getById(activeRestorationJobId!!)
             } else if (!backupId.isNullOrBlank()) {
                 dao.getByBackupId(backupId)
@@ -151,7 +152,15 @@ fun PhotoView(
             } else {
                 null
             }
+
+            val chunkedBackup = backupId?.let { DbHolder.database.chunkedBackupDao().getById(it) }
+            val remotePhoto = photo.remoteId?.let { DbHolder.database.remotePhotoDao().getById(it) }
+            val isChunked = chunkedBackup != null || photo.remoteId?.startsWith("CHUNKED_") == true
+            val size = chunkedBackup?.fileSize ?: remotePhoto?.fileSize ?: 0L
+            val isOver = isVideo && !isChunked && size > com.gallerysync.app.data.restoration.RestorationConfiguration.MAX_HOSTED_TELEGRAM_DOWNLOAD_BYTES
+            Pair(job, isOver)
         }
+        isDirectOverHostedLimit = overLimit
         if (existingJob != null && existingJob.status != RestorationStatus.CANCELLED) {
             activeRestorationJobId = existingJob.restorationId
             activeRestorationJob = existingJob
@@ -542,6 +551,39 @@ fun PhotoView(
                                         Icon(Icons.Rounded.PlayArrow, contentDescription = null)
                                         Spacer(Modifier.width(6.dp))
                                         Text("Open Restored Video")
+                                    }
+                                }
+                            } else if (isDirectOverHostedLimit) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f),
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(10.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Rounded.Error,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.error,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                text = "Restoration Unavailable (> 20 MB)",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = MaterialTheme.colorScheme.onErrorContainer
+                                            )
+                                        }
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            text = "Direct video exceeds Telegram's hosted 20 MB download limit (getFile ceiling). It cannot be retrieved via api.telegram.org.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f),
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
                                     }
                                 }
                             } else {

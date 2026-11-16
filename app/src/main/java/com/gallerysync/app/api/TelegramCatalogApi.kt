@@ -8,8 +8,10 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.net.ConnectException
@@ -165,6 +167,95 @@ open class TelegramCatalogApi(
             }
 
             parseSendDocumentResponse(bodyString, channelId, fileBytes.size.toLong())
+
+        } catch (e: SocketTimeoutException) {
+            Log.w(TAG, "Network timeout during sendDocument: ${e.message}")
+            TelegramCatalogUploadResult.NetworkError("Timeout during upload", e)
+        } catch (e: InterruptedIOException) {
+            TelegramCatalogUploadResult.NetworkError("Upload interrupted: ${e.message}", e)
+        } catch (e: UnknownHostException) {
+            TelegramCatalogUploadResult.NetworkError("Host unreachable", e)
+        } catch (e: ConnectException) {
+            TelegramCatalogUploadResult.NetworkError("Connection failed", e)
+        } catch (e: IOException) {
+            TelegramCatalogUploadResult.NetworkError(e.message ?: "I/O error", e)
+        } catch (e: Exception) {
+            TelegramCatalogUploadResult.NetworkError("Unexpected failure: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Uploads a document from a local File without loading the entire payload into RAM.
+     */
+    open suspend fun sendDocument(
+        botToken: String,
+        channelId: Long,
+        file: File,
+        fileName: String = file.name,
+        mimeType: String = "application/octet-stream",
+        messageThreadId: Long? = null,
+        caption: String? = null,
+        baseUrl: String = "https://api.telegram.org"
+    ): TelegramCatalogUploadResult = withContext(Dispatchers.IO) {
+        if (botToken.isBlank()) {
+            return@withContext TelegramCatalogUploadResult.Unauthorized(401, "Bot token is empty")
+        }
+        if (channelId == 0L) {
+            return@withContext TelegramCatalogUploadResult.InvalidResponse("Invalid channelId (0)")
+        }
+        if (!file.exists() || !file.canRead()) {
+            return@withContext TelegramCatalogUploadResult.InvalidResponse("File not found or unreadable: ${file.absolutePath}")
+        }
+
+        val url = "$baseUrl/bot$botToken/sendDocument"
+        val requestBody = file.asRequestBody(mimeType.toMediaTypeOrNull())
+
+        val bodyBuilder = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("chat_id", channelId.toString())
+            .addFormDataPart("document", fileName, requestBody)
+            .addFormDataPart("disable_content_type_detection", "true")
+
+        if (messageThreadId != null) {
+            bodyBuilder.addFormDataPart("message_thread_id", messageThreadId.toString())
+        }
+        if (caption != null) {
+            bodyBuilder.addFormDataPart("caption", caption)
+        }
+
+        val request = Request.Builder()
+            .url(url)
+            .post(bodyBuilder.build())
+            .build()
+
+        try {
+            val response = client.newCall(request).execute()
+            val code = response.code
+            val bodyString = response.body?.string()
+
+            if (code == 429) {
+                val retryAfter = parseRetryAfter(bodyString) ?: 30
+                Log.w(TAG, "Rate limited on sendDocument (HTTP 429), retry after ${retryAfter}s")
+                return@withContext TelegramCatalogUploadResult.RateLimited(
+                    retryAfterSeconds = retryAfter,
+                    description = "Telegram rate limited (retry after ${retryAfter}s)"
+                )
+            }
+            if (code == 401) {
+                return@withContext TelegramCatalogUploadResult.Unauthorized(code, "Unauthorized Telegram bot credentials")
+            }
+            if (code == 403) {
+                return@withContext TelegramCatalogUploadResult.PermissionDenied(code, "Bot lacks permissions in channel $channelId")
+            }
+            if (code in 500..599) {
+                return@withContext TelegramCatalogUploadResult.ServerError(code, "Telegram server error: HTTP $code")
+            }
+            if (!response.isSuccessful || bodyString.isNullOrBlank()) {
+                val desc = parseDescription(bodyString) ?: "HTTP $code"
+                return@withContext TelegramCatalogUploadResult.InvalidResponse("sendDocument failed with HTTP $code: $desc")
+            }
+
+            parseSendDocumentResponse(bodyString, channelId, file.length())
 
         } catch (e: SocketTimeoutException) {
             Log.w(TAG, "Network timeout during sendDocument: ${e.message}")

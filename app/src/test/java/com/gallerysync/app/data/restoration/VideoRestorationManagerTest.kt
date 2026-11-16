@@ -362,4 +362,121 @@ class VideoRestorationManagerTest {
 
         assertTrue(result is RestorationExecutionResult.Cancelled)
     }
+
+    @Test
+    fun directVideo_exceeding20MB_failsWithHostedLimitError() = runBlocking {
+        val remoteId = "direct_large_video_id"
+        val manager = VideoRestorationManager(database = database)
+        val job = manager.createOrGetJob(
+            context = context,
+            remoteId = remoteId,
+            fileName = "large_direct.mp4",
+            fileSize = 35_000_000L, // 35 MB direct video (> 20 MB hosted ceiling)
+            totalChunks = 1
+        )
+
+        val result = manager.executeRestoration(
+            context = context,
+            restorationId = job.restorationId,
+            botToken = "9999:fake_token"
+        )
+
+        assertTrue("Expected Error but got: $result", result is RestorationExecutionResult.Error)
+        val errorResult = result as RestorationExecutionResult.Error
+        assertFalse("Hosted limit failure must not be retryable", errorResult.isRetryable)
+        assertTrue("Error must mention 20 MB hosted download limit", errorResult.message.contains("20000000") || errorResult.message.contains("20 MB"))
+    }
+
+    @Test
+    fun chunkedRestoration_fastPath_skipsDownloadWhenOutputFileAlreadyReconstructed() = runBlocking {
+        val totalSize = 100 * 1024
+        val fullVideo = Random.nextBytes(totalSize)
+        val fullHash = sha256(fullVideo)
+
+        val backupId = "backup_fast_path"
+        val backup = ChunkedBackup(
+            backupId = backupId,
+            localId = "local_fast_path",
+            pathUri = "content://media/fast",
+            fileName = "fast.mp4",
+            fileSize = totalSize.toLong(),
+            mimeType = "video/mp4",
+            fileSha256 = fullHash,
+            chunkSize = 50 * 1024L,
+            totalChunks = 2,
+            completedChunks = 2,
+            status = ChunkedBackupStatus.DONE,
+            channelId = -100111L,
+            botId = 9999L
+        )
+        database.chunkedBackupDao().insert(backup)
+
+        val chunk0 = VideoChunk(
+            backupId = backupId,
+            chunkIndex = 0,
+            startOffset = 0L,
+            endOffset = 50 * 1024L,
+            chunkSize = 50 * 1024L,
+            chunkSha256 = "dummy0",
+            telegramFileId = "tg0",
+            telegramMessageId = 101L,
+            status = VideoChunkStatus.DONE
+        )
+        val chunk1 = VideoChunk(
+            backupId = backupId,
+            chunkIndex = 1,
+            startOffset = 50 * 1024L,
+            endOffset = totalSize.toLong(),
+            chunkSize = 50 * 1024L,
+            chunkSha256 = "dummy1",
+            telegramFileId = "tg1",
+            telegramMessageId = 102L,
+            status = VideoChunkStatus.DONE
+        )
+        database.videoChunkDao().insertAll(listOf(chunk0, chunk1))
+
+        var networkCalls = 0
+        val mockClient = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                networkCalls++
+                chain.proceed(chain.request())
+            }
+            .build()
+
+        val catalogApi = TelegramCatalogApi(mockClient)
+        val downloader = TelegramFileDownloader(mockClient, catalogApi)
+        val manager = VideoRestorationManager(
+            database = database,
+            downloader = downloader,
+            reconstructionEngine = VideoReconstructionEngine(),
+            catalogApi = catalogApi
+        )
+
+        val safDestinationFile = tempFolder.newFile("saf_fast_output.mp4")
+        val job = manager.createOrGetJob(
+            context = context,
+            backupId = backupId,
+            fileName = "fast.mp4",
+            fileSize = totalSize.toLong(),
+            fileSha256 = fullHash,
+            totalChunks = 2,
+            destinationUri = Uri.fromFile(safDestinationFile).toString()
+        )
+
+        // Pre-stage the reconstructed output file directly
+        val stagingDir = File(job.stagingDirectory)
+        val outputDir = File(stagingDir, RestorationConfiguration.RECONSTRUCT_STAGE_SUBDIR).apply { mkdirs() }
+        val outputFile = File(outputDir, "${job.originalFileName}.reconstructed")
+        outputFile.writeBytes(fullVideo)
+
+        val result = manager.executeRestoration(
+            context = context,
+            restorationId = job.restorationId,
+            botToken = "9999:fake_token"
+        )
+
+        assertTrue("Expected Success but got: $result", result is RestorationExecutionResult.Success)
+        assertEquals("Zero network calls should be made when output is already reconstructed", 0, networkCalls)
+        assertArrayEquals(fullVideo, safDestinationFile.readBytes())
+    }
 }

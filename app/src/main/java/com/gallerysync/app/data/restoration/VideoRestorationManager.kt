@@ -219,6 +219,36 @@ class VideoRestorationManager(
             return RestorationExecutionResult.VerificationFailed(err)
         }
 
+        // Fast-path: Check if reconstructed output is already verified on disk (e.g. SAF export retry)
+        if (outputFile.exists() && outputFile.length() == manifest.media.sizeBytes) {
+            val existingSha = outputFile.inputStream().use { ContentHasher.computeHashFromStream(it) }
+            if (existingSha.equals(manifest.media.sha256, ignoreCase = true)) {
+                Log.i(TAG, "Reconstructed output file already verified on disk for $restorationId. Skipping chunk downloads and reconstruction.")
+                dao.updateProgress(
+                    restorationId = restorationId,
+                    status = RestorationStatus.RECONSTRUCTING,
+                    verifiedChunks = manifest.chunkConfiguration.totalChunks,
+                    downloadedBytes = manifest.media.sizeBytes
+                )
+                val destUri = job.destinationUri
+                if (destUri.isNullOrBlank()) {
+                    dao.updateStatus(restorationId, RestorationStatus.AWAITING_DESTINATION)
+                    job = job.copy(status = RestorationStatus.AWAITING_DESTINATION)
+                    onProgress?.invoke(job)
+                    return RestorationExecutionResult.AwaitingDestination(
+                        restorationId = restorationId,
+                        stagedOutputFile = outputFile,
+                        totalBytes = manifest.media.sizeBytes,
+                        fullSha256 = manifest.media.sha256
+                    )
+                }
+                return exportReconstructedFileToSaf(context, job, outputFile, Uri.parse(destUri), manifest.media.sha256, onProgress)
+            } else {
+                Log.w(TAG, "Existing reconstructed file hash mismatch. Deleting invalid output.")
+                outputFile.delete()
+            }
+        }
+
         // 2. Download and verify missing chunks (resumable)
         dao.updateStatus(restorationId, RestorationStatus.DOWNLOADING)
         job = job.copy(status = RestorationStatus.DOWNLOADING)
@@ -392,13 +422,53 @@ class VideoRestorationManager(
             return RestorationExecutionResult.Error(err, isRetryable = false)
         }
 
+        // 0. Check direct video download compatibility against Telegram hosted 20 MB ceiling
+        if (job.expectedFileSize > RestorationConfiguration.MAX_HOSTED_TELEGRAM_DOWNLOAD_BYTES) {
+            val err = "Direct video (${job.expectedFileSize} bytes) exceeds Telegram hosted download limit of " +
+                "${RestorationConfiguration.MAX_HOSTED_TELEGRAM_DOWNLOAD_BYTES} bytes. " +
+                "Direct videos over 20 MB cannot be retrieved via api.telegram.org."
+            Log.e(TAG, err)
+            dao.updateStatus(restorationId, RestorationStatus.FAILED, err)
+            return RestorationExecutionResult.Error(err, isRetryable = false)
+        }
+
+        val expectedSize = job.expectedFileSize.takeIf { it > 0L }
+        val expectedHash = job.expectedSha256.takeIf { it.isNotBlank() }
+
+        // Fast-path: Check if downloaded normal video is already verified on disk (e.g. SAF export retry)
+        if (outputFile.exists() && expectedSize != null && outputFile.length() == expectedSize) {
+            val existingHash = outputFile.inputStream().use { ContentHasher.computeHashFromStream(it) }
+            if (expectedHash == null || existingHash.equals(expectedHash, ignoreCase = true)) {
+                Log.i(TAG, "Normal video already downloaded and verified on disk for $restorationId. Skipping re-download.")
+                dao.updateProgress(
+                    restorationId = restorationId,
+                    status = RestorationStatus.VERIFYING,
+                    verifiedChunks = 1,
+                    downloadedBytes = expectedSize
+                )
+                val destUri = job.destinationUri
+                if (destUri.isNullOrBlank()) {
+                    dao.updateStatus(restorationId, RestorationStatus.AWAITING_DESTINATION)
+                    job = job.copy(status = RestorationStatus.AWAITING_DESTINATION)
+                    onProgress?.invoke(job)
+                    return RestorationExecutionResult.AwaitingDestination(
+                        restorationId = restorationId,
+                        stagedOutputFile = outputFile,
+                        totalBytes = expectedSize,
+                        fullSha256 = existingHash
+                    )
+                }
+                return exportReconstructedFileToSaf(context, job, outputFile, Uri.parse(destUri), existingHash, onProgress)
+            } else {
+                Log.w(TAG, "Existing downloaded normal video hash mismatch. Deleting invalid file.")
+                outputFile.delete()
+            }
+        }
+
         // 1. Download
         dao.updateStatus(restorationId, RestorationStatus.DOWNLOADING)
         job = job.copy(status = RestorationStatus.DOWNLOADING)
         onProgress?.invoke(job)
-
-        val expectedSize = job.expectedFileSize.takeIf { it > 0L }
-        val expectedHash = job.expectedSha256.takeIf { it.isNotBlank() }
 
         val dlResult = downloader.downloadToFile(
             botToken = botToken,
@@ -448,6 +518,19 @@ class VideoRestorationManager(
                 val err = "Checksum mismatch: expected SHA=$expectedHash, actual SHA=${dlResult.actualSha256}"
                 dao.updateStatus(restorationId, RestorationStatus.FAILED, err)
                 return RestorationExecutionResult.VerificationFailed(err)
+            }
+            is TelegramDownloadResult.InsufficientStorage -> {
+                return RestorationExecutionResult.InsufficientStorage(dlResult.requiredBytes, dlResult.availableBytes)
+            }
+            is TelegramDownloadResult.InvalidResponse -> {
+                val err = "Telegram API error: ${dlResult.reason}"
+                dao.updateStatus(restorationId, RestorationStatus.FAILED, err)
+                return RestorationExecutionResult.Error(err, isRetryable = false)
+            }
+            is TelegramDownloadResult.Unauthorized -> {
+                val err = "Telegram unauthorized (401): ${dlResult.description}"
+                dao.updateStatus(restorationId, RestorationStatus.FAILED, err)
+                return RestorationExecutionResult.Error(err, isRetryable = false)
             }
             else -> {
                 val err = "Failed downloading video from Telegram"
