@@ -155,6 +155,7 @@ fun AppNavHost(
 
         composable(route = Screens.RemotePhotos.route) {
             val allCloudPhotos = viewModel.allCloudPhotosFlow.collectAsLazyPagingItems()
+            val allCloudPhotosList by viewModel.allCloudPhotosList.collectAsStateWithLifecycle()
             val totalCloudPhotosCount by viewModel.totalCloudPhotosCount.collectAsStateWithLifecycle()
             val lastViewedId by viewModel.lastViewedPhotoId.collectAsStateWithLifecycle()
 
@@ -163,6 +164,7 @@ fun AppNavHost(
 
             RemotePhotosGrid(
                 cloudPhotos = allCloudPhotos,
+                allPhotos = allCloudPhotosList,
                 onPhotoClick = { _, photo -> 
                     photo?.let { 
                         viewModel.updateLastViewedPhotoId(it.remoteId)

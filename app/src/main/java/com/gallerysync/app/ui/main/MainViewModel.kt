@@ -15,6 +15,8 @@ import androidx.paging.cachedIn
 import androidx.work.WorkManager
 import androidx.work.WorkInfo
 import com.gallerysync.app.data.localdb.DbHolder
+import com.gallerysync.app.data.localdb.WhDatabase
+import com.gallerysync.app.data.localdb.entities.ChunkedBackupStatus
 import com.gallerysync.app.data.localdb.entities.Photo
 import com.gallerysync.app.data.localdb.entities.RemotePhoto
 import com.gallerysync.app.data.localdb.recovery.InstallRecoveryManager
@@ -35,6 +37,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -86,6 +89,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         loadMediaStorePhotos()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                reconcileLocalRemotePhotos(DbHolder.database)
+            } catch (e: Exception) {
+                Log.e("MainViewModel", "Error reconciling remote photos", e)
+            }
+        }
     }
 
     val localPhotosFlow: Flow<PagingData<LocalUiPhoto>> by lazy {
@@ -152,6 +162,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         ).flow
     }.cachedIn(viewModelScope)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val allCloudPhotosList: StateFlow<List<RemotePhoto>> by lazy {
+        _selectedTopicAlbumId.flatMapLatest { albumId ->
+            if (albumId == -1L) {
+                DbHolder.database.remotePhotoDao().getAllFlow()
+            } else {
+                val currentAlbums = topicAlbums.value
+                val topicName = currentAlbums.find { it.id == albumId }?.label
+                if (topicName != null && topicName != "All") {
+                    DbHolder.database.remotePhotoDao().getByTopicNameFlow(topicName)
+                } else {
+                    DbHolder.database.remotePhotoDao().getAllFlow()
+                }
+            }
+        }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    }
 
     val localPhotosCount: StateFlow<Int> by lazy {
         DbHolder.database.photoDao().getAllCountFlow()
@@ -408,5 +436,65 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         _albums.value = albumList
+    }
+
+    private suspend fun reconcileLocalRemotePhotos(database: WhDatabase) {
+        val remoteDao = database.remotePhotoDao()
+        val chunkDao = database.chunkedBackupDao()
+        val photoDao = database.photoDao()
+
+        val existingRemoteIds = remoteDao.getAllRemoteIds().toSet()
+
+        // 1. Backfill from completed chunked backups
+        val doneChunked = chunkDao.getAll().filter { it.status == ChunkedBackupStatus.DONE && it.manifestFileId != null }
+        val missingFromChunked = doneChunked.filter { it.manifestFileId !in existingRemoteIds }.map { backup ->
+            RemotePhoto(
+                remoteId = backup.manifestFileId!!,
+                photoType = "mp4",
+                fileName = backup.fileName,
+                fileSize = backup.fileSize,
+                uploadedAt = backup.completedAt ?: backup.createdAt,
+                thumbnailCached = false,
+                localId = backup.localId,
+                messageId = backup.manifestMessageId,
+                contentHash = backup.fileSha256,
+                mediaType = "VIDEO",
+                status = "ACTIVE",
+                width = backup.width,
+                height = backup.height,
+                duration = backup.duration
+            )
+        }
+        if (missingFromChunked.isNotEmpty()) {
+            remoteDao.insertAllIfNotExists(*missingFromChunked.toTypedArray())
+            Log.i("MainViewModel", "Reconciled ${missingFromChunked.size} chunked video records into remote_photos")
+        }
+
+        // 2. Backfill from photos with remoteId
+        val uploadedPhotos = photoDao.getAllUploaded()
+        val missingFromPhotos = uploadedPhotos.filter { 
+            val rid = it.remoteId
+            rid != null && !rid.startsWith("CHUNKED_") && rid !in existingRemoteIds 
+        }.map { photo ->
+            RemotePhoto(
+                remoteId = photo.remoteId!!,
+                photoType = photo.photoType,
+                fileName = photo.pathUri.substringAfterLast("/"),
+                fileSize = null,
+                uploadedAt = photo.lastUploadAttempt ?: System.currentTimeMillis(),
+                thumbnailCached = false,
+                localId = photo.localId,
+                contentHash = photo.contentHash,
+                mediaType = photo.mediaType,
+                status = "ACTIVE",
+                width = photo.width,
+                height = photo.height,
+                duration = photo.duration
+            )
+        }
+        if (missingFromPhotos.isNotEmpty()) {
+            remoteDao.insertAllIfNotExists(*missingFromPhotos.toTypedArray())
+            Log.i("MainViewModel", "Reconciled ${missingFromPhotos.size} uploaded photo records into remote_photos")
+        }
     }
 }

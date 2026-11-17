@@ -155,6 +155,7 @@ fun ManageUploadsScreen(
     val syncedUploads by viewModel.syncedUploads.collectAsStateWithLifecycle()
     val queuedPhotos by viewModel.queuedPhotos.collectAsStateWithLifecycle()
     val holdingPhotos by viewModel.holdingPhotos.collectAsStateWithLifecycle()
+    val holdingCount by viewModel.holdingCount.collectAsStateWithLifecycle()
     val restorationJobs by viewModel.restorationJobs.collectAsStateWithLifecycle()
     val selectedIds by viewModel.selectedIds.collectAsStateWithLifecycle()
     val haptic = LocalHapticFeedback.current
@@ -163,12 +164,23 @@ fun ManageUploadsScreen(
     val tabs = UploadTab.entries
     val pagerState = rememberPagerState(pageCount = { tabs.size })
 
-    // Derived lists
+    // Single-pass computation of counts and derived lists
+    val (activeCount, completedCount, cancelledCount) = remember(allUploads) {
+        var active = 0
+        var completed = 0
+        var cancelled = 0
+        for (item in allUploads) {
+            when (item.status) {
+                UploadStatus.InProgress -> active++
+                UploadStatus.Completed -> completed++
+                UploadStatus.Cancelled -> cancelled++
+                else -> {}
+            }
+        }
+        Triple(active, completed, cancelled)
+    }
     val cancelledUploads = remember(allUploads) { allUploads.filter { it.status == UploadStatus.Cancelled } }
-
-    // Stats
-    val activeCount = allUploads.count { it.status == UploadStatus.InProgress }
-    val completedCount = allUploads.count { it.status == UploadStatus.Completed }
+    val nonCancelledAllUploads = remember(allUploads) { allUploads.filter { it.status != UploadStatus.Cancelled } }
     val failedCount = failedUploads.size
 
     val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -438,7 +450,6 @@ fun ManageUploadsScreen(
                 tabs.forEachIndexed { index, tab ->
                     val isSelected = pagerState.currentPage == index
                     // Count for badge
-                    val cancelledCount = allUploads.count { it.status == UploadStatus.Cancelled }
                     val count = when (tab) {
                         UploadTab.All -> allUploads.size + queuedPhotos.size
                         UploadTab.Manual -> manualUploads.size
@@ -512,9 +523,10 @@ fun ManageUploadsScreen(
                 ) { page ->
                     when (tabs[page]) {
                         UploadTab.All -> UploadListContent(
-                            uploads = allUploads.filter { it.status != UploadStatus.Cancelled },
+                            uploads = nonCancelledAllUploads,
                             queuedPhotos = queuedPhotos,
                             holdingPhotos = holdingPhotos,
+                            holdingCount = holdingCount,
                             showQueued = true,
                             onCancel = { viewModel.cancelUpload(it) },
                             onRetry = { id -> viewModel.retryUpload(id) },
@@ -529,6 +541,7 @@ fun ManageUploadsScreen(
                         UploadTab.Manual -> UploadListContent(
                             uploads = manualUploads,
                             queuedPhotos = emptyList(),
+                            holdingPhotos = emptyList(),
                             showQueued = false,
                             onCancel = { viewModel.cancelUpload(it) },
                             onRetry = { id -> viewModel.retryUpload(id) },
@@ -547,6 +560,7 @@ fun ManageUploadsScreen(
                             uploads = autoBackupUploads,
                             queuedPhotos = queuedPhotos,
                             holdingPhotos = holdingPhotos,
+                            holdingCount = holdingCount,
                             showQueued = true,
                             onCancel = { viewModel.cancelUpload(it) },
                             onRetry = { id -> viewModel.retryUpload(id) },
@@ -570,6 +584,7 @@ fun ManageUploadsScreen(
                         UploadTab.Synced -> UploadListContent(
                             uploads = syncedUploads,
                             queuedPhotos = emptyList(),
+                            holdingPhotos = emptyList(),
                             showQueued = false,
                             onCancel = {}, // Synced items usually aren't cancellable
                             onRetry = { id -> viewModel.retryUpload(id) },
@@ -599,8 +614,9 @@ fun ManageUploadsScreen(
                             viewModel = viewModel
                         )
                         UploadTab.Cancelled -> UploadListContent(
-                            uploads = allUploads.filter { it.status == UploadStatus.Cancelled },
+                            uploads = cancelledUploads,
                             queuedPhotos = emptyList(),
+                            holdingPhotos = emptyList(),
                             showQueued = false,
                             onCancel = { /* Cancelled items not cancellable */ },
                             onRetry = { id -> viewModel.retryUpload(id) },
@@ -617,6 +633,7 @@ fun ManageUploadsScreen(
                         UploadTab.Failed -> UploadListContent(
                             uploads = failedUploads,
                             queuedPhotos = emptyList(),
+                            holdingPhotos = emptyList(),
                             showQueued = false,
                             onCancel = { viewModel.cancelUpload(it) },
                             onRetry = { id -> viewModel.retryUpload(id) },
@@ -666,6 +683,7 @@ private fun UploadListContent(
     uploads: List<UploadUiItem>,
     queuedPhotos: List<Photo>,
     holdingPhotos: List<Photo> = emptyList(),
+    holdingCount: Int = 0,
     showQueued: Boolean,
     onCancel: (String) -> Unit,
     onRetry: (String) -> Unit,
@@ -681,13 +699,14 @@ private fun UploadListContent(
     snackbarHostState: SnackbarHostState? = null,
     viewModel: ManageUploadsViewModel? = null
 ) {
-    val (localUploads, setLocalUploads) = remember { mutableStateOf(uploads) }
-    LaunchedEffect(uploads) {
-        setLocalUploads(uploads)
-    }
-
-    val isEmpty = localUploads.isEmpty() && (!showQueued || (queuedPhotos.isEmpty() && holdingPhotos.isEmpty()))
+    val isEmpty = uploads.isEmpty() && (!showQueued || (queuedPhotos.isEmpty() && holdingPhotos.isEmpty()))
     val scope = rememberCoroutineScope()
+    
+    // Derived sub-lists memoized outside LazyListScope
+    val activeItems = remember(uploads) { uploads.filter { it.status != UploadStatus.Completed } }
+    val syncedItems = remember(uploads, isSyncedTab) {
+        if (isSyncedTab) uploads else uploads.filter { it.status == UploadStatus.Completed }
+    }
     
     // Refreshing state tied to ViewModel
     val isRefreshing by viewModel?.isRefreshing?.collectAsStateWithLifecycle() ?: remember { mutableStateOf(false) }
@@ -788,7 +807,6 @@ private fun UploadListContent(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             // ─── Active worker uploads ───────────────────────
-            val activeItems = localUploads.filter { it.status != UploadStatus.Completed }
             if (activeItems.isNotEmpty()) {
                 item(key = "header_active") {
                     SectionHeader(
@@ -797,46 +815,37 @@ private fun UploadListContent(
                     )
                 }
                 items(activeItems, key = { it.id }) { item ->
-                            // Resolve local thumbnail for work items that haven't set progress data yet
-                            val resolvedItem = if (item.thumbnailUri == null && item.localPhotoId == null) {
-                                val photoUri = queuedPhotos.firstOrNull { p ->
-                                    item.fileName != null && p.pathUri.contains(item.fileName, ignoreCase = true)
-                                }?.pathUri
-                                if (photoUri != null) item.copy(thumbnailUri = photoUri, localPhotoId = photoUri) else item
-                            } else item
-                            UploadItemCard(
-                                item = resolvedItem,
-                                onCancel = { onCancel(item.id) },
-                                onRetry = { onRetry(item.id) },
-                                onDismiss = { viewModel?.dismissFailedItem(item.id) },
-                                isSelected = selectedIds.contains(item.id),
-                                onToggleSelection = { onToggleSelection(item.id) },
-                                isSelectionMode = selectedIds.isNotEmpty(),
-                                onTap = {
-                                    if (selectedIds.isNotEmpty()) {
-                                        onToggleSelection(item.id)
-                                    } else if (item.status == UploadStatus.Failed) {
-                                        errorToShow = item
-                                    } else {
-                                        val uri = resolvedItem.localPhotoId ?: resolvedItem.thumbnailUri
-                                        if (uri != null) {
-                                            navigateToPhotoFromUri(navController, uri)
-                                        } else {
-                                            // Fallback: look up from queuedPhotos by matching file name
-                                            val queuedPhoto = queuedPhotos.find { it.pathUri.contains(item.fileName ?: "", ignoreCase = true) }
-                                            if (queuedPhoto != null) {
-                                                navController.navigate("photo_viewer/${java.net.URLEncoder.encode(queuedPhoto.localId, "UTF-8")}/false")
-                                            }
-                                        }
+                    UploadItemCard(
+                        item = item,
+                        onCancel = { onCancel(item.id) },
+                        onRetry = { onRetry(item.id) },
+                        onDismiss = { viewModel?.dismissFailedItem(item.id) },
+                        isSelected = selectedIds.contains(item.id),
+                        onToggleSelection = { onToggleSelection(item.id) },
+                        isSelectionMode = selectedIds.isNotEmpty(),
+                        onTap = {
+                            if (selectedIds.isNotEmpty()) {
+                                onToggleSelection(item.id)
+                            } else if (item.status == UploadStatus.Failed) {
+                                errorToShow = item
+                            } else {
+                                val uri = item.localPhotoId ?: item.thumbnailUri
+                                if (uri != null) {
+                                    navigateToPhotoFromUri(navController, uri)
+                                } else {
+                                    val queuedPhoto = queuedPhotos.find { it.pathUri.contains(item.fileName ?: "", ignoreCase = true) }
+                                    if (queuedPhoto != null) {
+                                        navController.navigate("photo_viewer/${java.net.URLEncoder.encode(queuedPhoto.localId, "UTF-8")}/false")
                                     }
-                                },
-                                modifier = Modifier.animateItem()
-                            )
+                                }
+                            }
+                        },
+                        modifier = Modifier.animateItem()
+                    )
                 }
             }
  
             // ─── Synced/History from DB ──────────────────────
-            val syncedItems = if (isSyncedTab) localUploads else localUploads.filter { it.status == UploadStatus.Completed }
             if (syncedItems.isNotEmpty()) {
                 item(key = "header_synced") {
                     SectionHeader(
@@ -845,104 +854,28 @@ private fun UploadListContent(
                     )
                 }
                 items(syncedItems, key = { it.id }) { item ->
-                    if (isSyncedTab) {
-                        /* Swipe-to-dismiss disabled for Synced tab. Kept for reference.
-                        val swipeState = androidx.compose.material3.rememberSwipeToDismissBoxState(
-                            confirmValueChange = {
-                                if (it == androidx.compose.material3.SwipeToDismissBoxValue.EndToStart) {
-                                    onDelete(item.id)
-                                    setLocalUploads(localUploads.filterNot { it.id == item.id })
-                                    true
-                                } else false
-                            }
-                        )
-
-                        androidx.compose.material3.SwipeToDismissBox(
-                            state = swipeState,
-                            enableDismissFromStartToEnd = false,
-                            backgroundContent = {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .clip(RoundedCornerShape(20.dp))
-                                        .background(MaterialTheme.colorScheme.errorContainer)
-                                        .padding(horizontal = 20.dp),
-                                    contentAlignment = Alignment.CenterEnd
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Cancel, // Or Delete icon
-                                        contentDescription = "Delete from history",
-                                        tint = MaterialTheme.colorScheme.onErrorContainer
-                                    )
+                    UploadItemCard(
+                        item = item,
+                        onCancel = {},
+                        onRetry = {},
+                        onDismiss = { viewModel?.dismissFailedItem(item.id) },
+                        isSelected = selectedIds.contains(item.id),
+                        onToggleSelection = { onToggleSelection(item.id) },
+                        isSelectionMode = selectedIds.isNotEmpty(),
+                        onTap = {
+                            if (selectedIds.isNotEmpty()) {
+                                onToggleSelection(item.id)
+                            } else {
+                                val localId = item.localId
+                                if (localId != null) {
+                                    navController.navigate("photo_viewer/$localId/false")
+                                } else {
+                                    navigateToPhotoFromUri(navController, item.localPhotoId ?: item.thumbnailUri)
                                 }
                             }
-                        ) {
-                            UploadItemCard(
-                                item = item,
-                                onCancel = {},
-                                onRetry = { onRetry(item.id) },
-                                isSelected = selectedIds.contains(item.id),
-                                onToggleSelection = { onToggleSelection(item.id) },
-                                isSelectionMode = selectedIds.isNotEmpty(),
-                                onTap = {
-                                    if (selectedIds.isNotEmpty()) {
-                                        onToggleSelection(item.id)
-                                    } else {
-                                        navigateToPhotoFromUri(navController, item.localPhotoId ?: item.thumbnailUri)
-                                    }
-                                },
-                                modifier = Modifier.animateItem()
-                            )
-                        }
-                        */
-
-                        // Render the item without swipe-to-dismiss
-                        UploadItemCard(
-                            item = item,
-                            onCancel = {},
-                            onRetry = {},
-                            onDismiss = { viewModel?.dismissFailedItem(item.id) },
-                            isSelected = selectedIds.contains(item.id),
-                            onToggleSelection = { onToggleSelection(item.id) },
-                            isSelectionMode = selectedIds.isNotEmpty(),
-                            onTap = {
-                                if (selectedIds.isNotEmpty()) {
-                                    onToggleSelection(item.id)
-                                } else {
-                                    val localId = item.localId
-                                    if (localId != null) {
-                                        navController.navigate("photo_viewer/$localId/false")
-                                    } else {
-                                        navigateToPhotoFromUri(navController, item.localPhotoId ?: item.thumbnailUri)
-                                    }
-                                }
-                            },
-                            modifier = Modifier.animateItem()
-                        )
-                    } else {
-                        UploadItemCard(
-                            item = item,
-                            onCancel = {},
-                            onRetry = {},
-                            onDismiss = { viewModel?.dismissFailedItem(item.id) },
-                            isSelected = selectedIds.contains(item.id),
-                            onToggleSelection = { onToggleSelection(item.id) },
-                            isSelectionMode = selectedIds.isNotEmpty(),
-                            onTap = {
-                                if (selectedIds.isNotEmpty()) {
-                                    onToggleSelection(item.id)
-                                } else {
-                                    val localId = item.localId
-                                    if (localId != null) {
-                                        navController.navigate("photo_viewer/$localId/false")
-                                    } else {
-                                        navigateToPhotoFromUri(navController, item.localPhotoId ?: item.thumbnailUri)
-                                    }
-                                }
-                            },
-                            modifier = Modifier.animateItem()
-                        )
-                    }
+                        },
+                        modifier = Modifier.animateItem()
+                    )
                 }
             }
 
@@ -969,9 +902,10 @@ private fun UploadListContent(
 
             // Unverified / Holding media (Phase 10.3.2 Reinstall Protection)
             if (showQueued && holdingPhotos.isNotEmpty()) {
+                val displayCount = if (holdingCount > 0) holdingCount else holdingPhotos.size
                 item(key = "header_holding") {
                     SectionHeader(
-                        title = "Unverified Media (${holdingPhotos.size})",
+                        title = "Unverified Media ($displayCount)",
                         icon = Icons.Rounded.Schedule
                     )
                 }
@@ -989,6 +923,14 @@ private fun UploadListContent(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
+                            if (displayCount > holdingPhotos.size) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Showing preview of ${holdingPhotos.size} of $displayCount items",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                                )
+                            }
                             Spacer(modifier = Modifier.height(8.dp))
                             androidx.compose.material3.Button(
                                 onClick = { viewModel?.uploadAllHolding() },
@@ -997,7 +939,7 @@ private fun UploadListContent(
                             ) {
                                 Icon(Icons.Rounded.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Upload All (${holdingPhotos.size})", style = MaterialTheme.typography.labelMedium)
+                                Text("Upload All ($displayCount)", style = MaterialTheme.typography.labelMedium)
                             }
                         }
                     }
@@ -1009,12 +951,11 @@ private fun UploadListContent(
                             try {
                                 navController.navigate("photo_viewer/${photo.localId}/false")
                             } catch (_: Exception) {}
-                        },
-                        modifier = Modifier.animateItem()
+                        }
                     )
                 }
             }
-            }
+        }
         }
     }
 }
@@ -1089,7 +1030,6 @@ private fun UploadItemCard(
         tonalElevation = if (isSelected) 4.dp else 1.dp,
         modifier = modifier
             .fillMaxWidth()
-            .animateContentSize(spring(stiffness = Spring.StiffnessMediumLow))
             .clip(RoundedCornerShape(20.dp))
             .combinedClickable(
                 onClick = onTap,
@@ -1110,6 +1050,21 @@ private fun UploadItemCard(
             ) {
                 // ─── Thumbnail ───────────────────────────────
                 val thumbData = item.thumbnailUri ?: item.localPhotoId
+                val context = LocalContext.current
+                val imageRequest = remember(thumbData) {
+                    if (thumbData == null) null
+                    else {
+                        val builder = ImageRequest.Builder(context)
+                            .data(thumbData)
+                            .crossfade(true)
+                            .size(256)
+                        if (thumbData is com.gallerysync.app.utils.coil.FileIdData) {
+                            builder.memoryCacheKey("rt_thumb_${thumbData.fileId}")
+                                .diskCacheKey("rt_thumb_${thumbData.fileId}")
+                        }
+                        builder.build()
+                    }
+                }
                 Box(
                     modifier = Modifier
                         .size(64.dp)
@@ -1119,22 +1074,10 @@ private fun UploadItemCard(
                 ) {
                     var isImageLoadFailed by remember(thumbData) { mutableStateOf(false) }
 
-                    if (thumbData != null && !isImageLoadFailed) {
+                    if (imageRequest != null && !isImageLoadFailed) {
                         AsyncImage(
                             imageLoader = com.gallerysync.app.utils.coil.ImageLoaderModule.thumbnailImageLoader,
-                            model = let {
-                                val thumb = thumbData
-                                val builder = ImageRequest.Builder(LocalContext.current)
-                                    .data(thumb)
-                                    .crossfade(true)
-                                    .size(256)
-                                
-                                if (thumb is com.gallerysync.app.utils.coil.FileIdData) {
-                                    builder.memoryCacheKey("rt_thumb_${thumb.fileId}")
-                                        .diskCacheKey("rt_thumb_${thumb.fileId}")
-                                }
-                                builder.build()
-                            },
+                            model = imageRequest,
                             contentDescription = if (item.isVideo) "Video thumbnail" else null,
                             contentScale = ContentScale.Crop,
                             onError = { isImageLoadFailed = true },
@@ -1302,13 +1245,16 @@ private fun UploadItemCard(
                         }
 
                         // Timestamp
-                        Text(
-                            text = DateUtils.getRelativeTimeSpanString(
+                        val timeAgo = remember(item.timestamp) {
+                            DateUtils.getRelativeTimeSpanString(
                                 item.timestamp,
                                 System.currentTimeMillis(),
                                 DateUtils.MINUTE_IN_MILLIS,
                                 DateUtils.FORMAT_ABBREV_RELATIVE
-                            ).toString(),
+                            ).toString()
+                        }
+                        Text(
+                            text = timeAgo,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                         )
@@ -1385,14 +1331,9 @@ private fun UploadItemCard(
             // ─── Progress bar ────────────────────────────────
             AnimatedVisibility(visible = item.status == UploadStatus.InProgress) {
                 Column {
-                    val animatedProgress by animateFloatAsState(
-                        targetValue = item.progress,
-                        animationSpec = spring(stiffness = Spring.StiffnessLow),
-                        label = "progress"
-                    )
                     if (item.progress > 0f) {
                         LinearProgressIndicator(
-                            progress = { animatedProgress },
+                            progress = { item.progress },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(4.dp)
@@ -1500,14 +1441,18 @@ private fun QueuedPhotoCard(
                     .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                 contentAlignment = Alignment.Center
             ) {
+                val context = LocalContext.current
+                val imageRequest = remember(photo.pathUri) {
+                    ImageRequest.Builder(context)
+                        .data(photo.pathUri)
+                        .crossfade(true)
+                        .size(256)
+                        .build()
+                }
                 var isLoadFailed by remember(photo.pathUri) { mutableStateOf(false) }
                 if (!isLoadFailed) {
                     AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(photo.pathUri)
-                            .crossfade(true)
-                            .size(256)
-                            .build(),
+                        model = imageRequest,
                         contentDescription = if (isVideo) "Video thumbnail" else null,
                         contentScale = ContentScale.Crop,
                         onError = { isLoadFailed = true },
@@ -1776,7 +1721,9 @@ fun RestorationJobCard(
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1
                     )
-                    val sizeText = android.text.format.Formatter.formatFileSize(context, job.expectedFileSize)
+                    val sizeText = remember(job.expectedFileSize) {
+                        android.text.format.Formatter.formatFileSize(context, job.expectedFileSize)
+                    }
                     val chunksText = if (job.totalChunks > 1) " • Chunks: ${job.verifiedChunks}/${job.totalChunks}" else ""
                     Text(
                         text = "$sizeText$chunksText",
@@ -1826,8 +1773,12 @@ fun RestorationJobCard(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        val dlText = android.text.format.Formatter.formatFileSize(context, job.downloadedBytes)
-                        val totalText = android.text.format.Formatter.formatFileSize(context, job.expectedFileSize)
+                        val dlText = remember(job.downloadedBytes) {
+                            android.text.format.Formatter.formatFileSize(context, job.downloadedBytes)
+                        }
+                        val totalText = remember(job.expectedFileSize) {
+                            android.text.format.Formatter.formatFileSize(context, job.expectedFileSize)
+                        }
                         Text(
                             text = "$dlText / $totalText",
                             style = MaterialTheme.typography.labelSmall,

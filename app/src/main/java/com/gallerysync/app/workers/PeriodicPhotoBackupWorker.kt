@@ -13,6 +13,7 @@ import com.gallerysync.app.api.BotApi
 import com.gallerysync.app.data.localdb.DbHolder
 import com.gallerysync.app.data.localdb.Preferences
 import com.gallerysync.app.data.localdb.entities.Photo
+import com.gallerysync.app.data.localdb.entities.RemotePhoto
 import com.gallerysync.app.data.localdb.entities.UploadQueue
 import com.gallerysync.app.data.upload.TelegramUploadDispatcher
 import com.gallerysync.app.data.upload.UploadQueueRepository
@@ -364,6 +365,29 @@ class PeriodicPhotoBackupWorker(
                                                 remoteId = "CHUNKED_${chunkResult.backupId}",
                                                 messageId = manifestRes.manifestReference.messageId
                                             )
+                                            try {
+                                                val remote = RemotePhoto(
+                                                    remoteId = manifestRes.manifestReference.fileId,
+                                                    photoType = "mp4",
+                                                    fileName = current.pathUri.substringAfterLast("/"),
+                                                    fileSize = rawSourceSize,
+                                                    uploadedAt = System.currentTimeMillis(),
+                                                    thumbnailCached = false,
+                                                    localId = current.localId,
+                                                    messageId = manifestRes.manifestReference.messageId,
+                                                    contentHash = hash,
+                                                    mediaType = "VIDEO",
+                                                    width = current.width,
+                                                    height = current.height,
+                                                    duration = current.duration,
+                                                    status = "ACTIVE",
+                                                    uploadedByDevice = Preferences.getOrCreateDeviceId()
+                                                )
+                                                DbHolder.database.remotePhotoDao().insertAll(remote)
+                                                Log.i("PeriodicBackup", "Registered chunked video in remote_photos: fileId=${manifestRes.manifestReference.fileId}")
+                                            } catch (e: Exception) {
+                                                Log.e("PeriodicBackup", "Failed to register RemotePhoto for chunked video: ${e.message}", e)
+                                            }
                                             true
                                         }
                                         is com.gallerysync.app.data.catalog.MasterIndexCommitResult.RateLimited -> {

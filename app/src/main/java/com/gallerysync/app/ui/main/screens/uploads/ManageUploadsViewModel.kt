@@ -2,6 +2,7 @@ package com.gallerysync.app.ui.main.screens.uploads
 
 import android.app.Application
 import android.util.Log
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
@@ -88,6 +89,7 @@ object DurationFormatter {
  */
 fun formatDuration(durationMs: Long?): String = DurationFormatter.formatDuration(durationMs)
 
+@Immutable
 data class UploadUiItem(
     val id: String,
     val type: UploadType,
@@ -242,7 +244,7 @@ class ManageUploadsViewModel @JvmOverloads constructor(
         val photosByLocalId: Map<String, Photo> = emptyMap()
     )
 
-    private val localPhotoLookupsFlow: Flow<LocalPhotoLookups> = DbHolder.database.photoDao().getAllFlow()
+    private val localPhotoLookupsFlow: Flow<LocalPhotoLookups> = DbHolder.database.photoDao().getAllUploadedFlow()
         .onStart { emit(emptyList()) }
         .map { photos -> 
             val pathMap = photos.filter { it.remoteId != null }.associate { it.remoteId!! to it.pathUri }
@@ -250,6 +252,7 @@ class ManageUploadsViewModel @JvmOverloads constructor(
             val photosByLocalId = photos.associateBy { it.localId }
             LocalPhotoLookups(pathMap, idMap, photosByLocalId)
         }
+        .flowOn(Dispatchers.Default)
 
     private val remoteToLocalPathMapFlow: Flow<Map<String, String>> = localPhotoLookupsFlow
         .map { it.pathMap }
@@ -264,8 +267,8 @@ class ManageUploadsViewModel @JvmOverloads constructor(
         .flowOn(Dispatchers.IO)
         .stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Holding Photos (unverified media from initial baseline / reinstall, safely held from auto upload)
-    val holdingPhotos: StateFlow<List<Photo>> = DbHolder.database.photoDao().getAllHoldingFlow()
+    // Holding Photos preview (unverified media from initial baseline / reinstall, safely held from auto upload)
+    val holdingPhotos: StateFlow<List<Photo>> = DbHolder.database.photoDao().getHoldingPreviewFlow(limit = 30)
         .onStart { emit(emptyList()) }
         .map { photos -> filterExcludedBucketPhotos(photos) }
         .flowOn(Dispatchers.IO)
@@ -357,85 +360,95 @@ class ManageUploadsViewModel @JvmOverloads constructor(
             val item = mapWorkInfoToUiItem(info, type, lookups.pathMap)
             if (item != null && item.id !in dismissedIds) item else null
         }
-    }
+    }.flowOn(Dispatchers.Default)
 
     // Direct observation of persistent Room upload_queue
     private val queueItemsFlow: Flow<List<UploadUiItem>> = DbHolder.database.uploadQueueDao().getAllFlow()
         .onStart { emit(emptyList()) }
         .map { queueList ->
-        val isAutoBackupEnabled = Preferences.getBoolean(Preferences.isAutoBackupEnabledKey, true)
-        queueList.map { queue ->
-            val status = when (queue.status) {
-                "PENDING" -> UploadStatus.Queued
-                "IN_PROGRESS" -> UploadStatus.InProgress
-                "DONE", "COMPLETED" -> UploadStatus.Completed
-                "FAILED", "EXCEEDS_LIMIT", "SOURCE_MISSING" -> UploadStatus.Failed
-                "RETRY_WAIT" -> UploadStatus.Queued
-                "CANCELLED" -> UploadStatus.Cancelled
-                else -> UploadStatus.Queued
-            }
+            val isAutoBackupEnabled = Preferences.getBoolean(Preferences.isAutoBackupEnabledKey, true)
+            // Evaluate network policies ONCE outside the item loop to prevent hundreds of IPC binder calls
+            val manualNetworkStatus = com.gallerysync.app.data.upload.SyncNetworkPolicy.evaluateNetwork(application, isManual = true)
+            val autoNetworkStatus = com.gallerysync.app.data.upload.SyncNetworkPolicy.evaluateNetwork(application, isManual = false)
 
-            val isManual = queue.workerType == "manual"
-            val networkStatus = com.gallerysync.app.data.upload.SyncNetworkPolicy.evaluateNetwork(application, isManual)
+            queueList.map { queue ->
+                val status = when (queue.status) {
+                    "PENDING" -> UploadStatus.Queued
+                    "IN_PROGRESS" -> UploadStatus.InProgress
+                    "DONE", "COMPLETED" -> UploadStatus.Completed
+                    "FAILED", "EXCEEDS_LIMIT", "SOURCE_MISSING" -> UploadStatus.Failed
+                    "RETRY_WAIT" -> UploadStatus.Queued
+                    "CANCELLED" -> UploadStatus.Cancelled
+                    else -> UploadStatus.Queued
+                }
 
-            val progressText = when (queue.status) {
-                "PENDING" -> when {
-                    !isAutoBackupEnabled && !isManual -> "Backup paused"
-                    networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.NoNetwork -> "No network"
-                    networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.DisallowedMobileData -> "Waiting for Wi-Fi"
-                    networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.DisallowedMeteredWifi -> "Waiting for unmetered network"
-                    networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.IneligibleOther -> "Waiting for Wi-Fi"
-                    else -> "Queued for backup..."
+                val isManual = queue.workerType == "manual"
+                val networkStatus = if (isManual) manualNetworkStatus else autoNetworkStatus
+
+                val progressText = when (queue.status) {
+                    "PENDING" -> when {
+                        !isAutoBackupEnabled && !isManual -> "Backup paused"
+                        networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.NoNetwork -> "No network"
+                        networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.DisallowedMobileData -> "Waiting for Wi-Fi"
+                        networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.DisallowedMeteredWifi -> "Waiting for unmetered network"
+                        networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.IneligibleOther -> "Waiting for Wi-Fi"
+                        else -> "Queued for backup..."
+                    }
+                    "IN_PROGRESS" -> "Uploading to Telegram..."
+                    "DONE", "COMPLETED" -> "Synced to Cloud"
+                    "RETRY_WAIT" -> when {
+                        networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.NoNetwork -> "No network"
+                        networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.DisallowedMobileData -> "Waiting for Wi-Fi"
+                        networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.DisallowedMeteredWifi -> "Waiting for unmetered network"
+                        else -> "Retry scheduled"
+                    }
+                    "EXCEEDS_LIMIT" -> "Exceeds 16 MiB limit"
+                    "SOURCE_MISSING" -> "Source media missing"
+                    "FAILED" -> queue.errorMessage?.take(40) ?: "Upload failed"
+                    "CANCELLED" -> "Cancelled"
+                    else -> queue.status
                 }
-                "IN_PROGRESS" -> "Uploading to Telegram..."
-                "DONE", "COMPLETED" -> "Synced to Cloud"
-                "RETRY_WAIT" -> when {
-                    networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.NoNetwork -> "No network"
-                    networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.DisallowedMobileData -> "Waiting for Wi-Fi"
-                    networkStatus is com.gallerysync.app.data.upload.SyncNetworkPolicy.NetworkStatus.DisallowedMeteredWifi -> "Waiting for unmetered network"
-                    else -> "Retry scheduled"
-                }
-                "EXCEEDS_LIMIT" -> "Exceeds 50 MB limit"
-                "SOURCE_MISSING" -> "Source media missing"
-                "FAILED" -> queue.errorMessage?.take(40) ?: "Upload failed"
-                "CANCELLED" -> "Cancelled"
-                else -> queue.status
+                val fileName = queue.pathUri.substringAfterLast("/")
+                val isVideo = queue.mediaType == "VIDEO"
+                UploadUiItem(
+                    id = queue.id.toString(),
+                    type = when (queue.workerType) {
+                        "instant" -> UploadType.Instant
+                        "manual" -> UploadType.Selective
+                        else -> UploadType.Background
+                    },
+                    status = status,
+                    progress = if (status == UploadStatus.Completed) 1f else 0f,
+                    progressText = progressText,
+                    thumbnailUri = queue.pathUri,
+                    fileName = fileName,
+                    localPhotoId = queue.pathUri,
+                    localId = queue.localId,
+                    isCancellable = status == UploadStatus.InProgress || status == UploadStatus.Queued,
+                    timestamp = queue.createdAt,
+                    isVideo = isVideo,
+                    duration = queue.duration,
+                    width = queue.width,
+                    height = queue.height
+                )
             }
-            val fileName = queue.pathUri.substringAfterLast("/")
-            val isVideo = queue.mediaType == "VIDEO"
-            UploadUiItem(
-                id = queue.id.toString(),
-                type = when (queue.workerType) {
-                    "instant" -> UploadType.Instant
-                    "manual" -> UploadType.Selective
-                    else -> UploadType.Background
-                },
-                status = status,
-                progress = if (status == UploadStatus.Completed) 1f else 0f,
-                progressText = progressText,
-                thumbnailUri = queue.pathUri,
-                fileName = fileName,
-                localPhotoId = queue.pathUri,
-                localId = queue.localId,
-                isCancellable = status == UploadStatus.InProgress || status == UploadStatus.Queued,
-                timestamp = queue.createdAt,
-                isVideo = isVideo,
-                duration = queue.duration,
-                width = queue.width,
-                height = queue.height
-            )
         }
-    }
+        .flowOn(Dispatchers.Default)
 
     // Combined active work with local thumbnails resolved
     private val allWorkFlow: Flow<List<UploadUiItem>> = combine(rawWorkFlow, queuedPhotos, _retryingIds, queueItemsFlow) { workItems, nonUploadedPhotos, retryingIds, queueItems ->
+        // Index nonUploadedPhotos by localId and fileName for O(1) matching instead of O(N*M) linear scans
+        val nonUploadedByLocalId = nonUploadedPhotos.associateBy { it.localId }
+        val nonUploadedByFileName = nonUploadedPhotos.mapNotNull { p ->
+            val name = p.pathUri.substringAfterLast("/").takeIf { it.isNotEmpty() }
+            if (name != null) name.lowercase() to p else null
+        }.toMap()
+
         val resolvedWork = workItems.map { item ->
             if (item.id in retryingIds) item.copy(status = UploadStatus.Queued, progressText = "Retrying...") else item
         }.map { item ->
-            val matchedPhoto = nonUploadedPhotos.firstOrNull { p ->
-                (item.fileName != null && p.pathUri.contains(item.fileName, ignoreCase = true)) ||
-                (item.localId != null && p.localId == item.localId)
-            }
+            val matchedPhoto = (if (item.localId != null) nonUploadedByLocalId[item.localId] else null)
+                ?: (if (item.fileName != null) nonUploadedByFileName[item.fileName.lowercase()] else null)
             var updated = item
             if (updated.thumbnailUri == null && updated.localPhotoId == null && matchedPhoto != null) {
                 updated = updated.copy(thumbnailUri = matchedPhoto.pathUri, localPhotoId = matchedPhoto.pathUri)
@@ -458,93 +471,74 @@ class ManageUploadsViewModel @JvmOverloads constructor(
         }
         val queueLocalIds = queueItems.mapNotNull { it.localId }.toSet()
         queueItems + resolvedWork.filter { it.localId !in queueLocalIds }
-    }
+    }.flowOn(Dispatchers.Default)
 
-    // All uploads sorted by status and merging DB history
-    val allUploads: StateFlow<List<UploadUiItem>> = combine(
-        allWorkFlow, 
+    // Mapped remote photo items from Room (computed ONCE off the main thread)
+    private val dbUploadsFlow: Flow<List<UploadUiItem>> = combine(
         remotePhotosFlow,
         localPhotoLookupsFlow,
         _dismissedIds
-    ) { workItems, dbItems, lookups, dismissed ->
-        val dbUploads = dbItems
+    ) { dbItems, lookups, dismissed ->
+        dbItems
             .filter { it.remoteId !in dismissed }
             .map { mapRemotePhotoToUiItem(it, lookups.pathMap, lookups.idMap, lookups.photosByLocalId) }
-        val dbFileNames = dbItems.mapNotNull { it.fileName }.toSet()
+    }.flowOn(Dispatchers.Default)
 
-        // Deduplicate: Keep work items only if they are not yet in the DB
-        // or if they are still running/queued.
+    // Merged and deduplicated active work and DB history (computed ONCE off the main thread)
+    private val mergedUploadsFlow: Flow<List<UploadUiItem>> = combine(
+        allWorkFlow,
+        dbUploadsFlow
+    ) { workItems, dbUploads ->
+        val dbFileNames = dbUploads.mapNotNull { it.fileName }.toSet()
         val filteredWork = workItems.filter { item ->
             if (item.status == UploadStatus.Completed) {
-                // If recently completed, only keep if it hasn't reached the DB yet
-                return@filter item.fileName !in dbFileNames
+                item.fileName !in dbFileNames
+            } else {
+                true
             }
-            // Keep all active/failed/queued items
-            true
         }
-        
-        (filteredWork + dbUploads).sortedWith(
+        filteredWork + dbUploads
+    }.flowOn(Dispatchers.Default)
+
+    // All uploads sorted by status and timestamp
+    val allUploads: StateFlow<List<UploadUiItem>> = mergedUploadsFlow.map { list ->
+        list.sortedWith(
             compareByDescending<UploadUiItem> { it.status == UploadStatus.InProgress }
                 .thenByDescending { it.status == UploadStatus.Queued }
                 .thenByDescending { it.status == UploadStatus.Failed }
                 .thenByDescending { it.timestamp }
         )
-    }.stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
- 
-    // Manual uploads only (manual backup + instant uploads + DB history of these types)
-    val manualUploads: StateFlow<List<UploadUiItem>> = combine(
-        allWorkFlow, 
-        remotePhotosFlow,
-        localPhotoLookupsFlow,
-        _dismissedIds
-    ) { workItems, dbItems, lookups, dismissed ->
-        val manualWork = workItems.filter { it.type == UploadType.Selective || it.type == UploadType.Instant }
-        val manualDb = dbItems
-            .filter { it.uploadType == "manual_backup" || it.uploadType == "instant" }
-            .filter { it.remoteId !in dismissed }
-            .map { mapRemotePhotoToUiItem(it, lookups.pathMap, lookups.idMap, lookups.photosByLocalId) }
-        
-        val dbFileNames = manualDb.mapNotNull { it.fileName }.toSet()
-        val filteredWork = manualWork.filter { 
-            if (it.status == UploadStatus.Completed) it.fileName !in dbFileNames else true
-        }
-        
-        val result: List<UploadUiItem> = (filteredWork + manualDb).sortedWith(
-            compareByDescending<UploadUiItem> { it.status == UploadStatus.InProgress }
-                .thenByDescending { it.timestamp }
-        )
-        result
-    }.stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
- 
+    }.flowOn(Dispatchers.Default)
+    .stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Manual uploads only
+    val manualUploads: StateFlow<List<UploadUiItem>> = mergedUploadsFlow.map { list ->
+        list.filter { it.type == UploadType.Selective || it.type == UploadType.Instant }
+            .sortedWith(
+                compareByDescending<UploadUiItem> { it.status == UploadStatus.InProgress }
+                    .thenByDescending { it.timestamp }
+            )
+    }.flowOn(Dispatchers.Default)
+    .stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // Auto backup uploads only (Active work)
     val autoBackupUploads: StateFlow<List<UploadUiItem>> = allWorkFlow.map { items ->
         items.filter { it.type == UploadType.Background && it.status != UploadStatus.Completed }
-    }.stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
- 
+    }.flowOn(Dispatchers.Default)
+    .stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // Failed uploads only
     val failedUploads: StateFlow<List<UploadUiItem>> = allWorkFlow.map { items ->
         items.filter { it.status == UploadStatus.Failed }
-    }.stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
- 
+    }.flowOn(Dispatchers.Default)
+    .stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // Synced/Completed uploads history (All DB records + recently synced)
-    val syncedUploads: StateFlow<List<UploadUiItem>> = combine(
-        allWorkFlow,
-        remotePhotosFlow,
-        localPhotoLookupsFlow,
-        _dismissedIds
-    ) { workItems, dbItems, lookups, dismissed ->
-        val dbUploads = dbItems
-            .filter { it.remoteId !in dismissed }
-            .map { mapRemotePhotoToUiItem(it, lookups.pathMap, lookups.idMap, lookups.photosByLocalId) }
-        val dbFileNames = dbItems.mapNotNull { it.fileName }.toSet()
-        
-        // Include work items that are completed but not yet in DB
-        val recentlyCompletedWork = workItems.filter { 
-            it.status == UploadStatus.Completed && it.fileName !in dbFileNames && it.id !in dismissed
-        }
-        
-        (recentlyCompletedWork + dbUploads).sortedByDescending { it.timestamp }
-    }.stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val syncedUploads: StateFlow<List<UploadUiItem>> = mergedUploadsFlow.map { list ->
+        list.filter { it.status == UploadStatus.Completed }
+            .sortedByDescending { it.timestamp }
+    }.flowOn(Dispatchers.Default)
+    .stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
  
     fun mapRemotePhotoToUiItem(
         remote: com.gallerysync.app.data.localdb.entities.RemotePhoto,

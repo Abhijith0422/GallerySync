@@ -124,27 +124,15 @@ private fun formatRemotePhotoDate(timestamp: Long): String {
 
 // Optimized function to group remote photos by date ensuring ALL photos are included
 private fun groupRemotePhotosByDateOptimized(
-    cloudPhotos: LazyPagingItems<RemotePhoto>
+    allPhotos: List<RemotePhoto>
 ): List<RemoteDateGroup> {
     val photosByDate = mutableMapOf<String, MutableList<Pair<RemotePhoto, Int>>>()
-    var processedCount = 0
-    var skippedCount = 0
 
-    Log.d(TAG, "🔍 Starting remote date grouping for ${cloudPhotos.itemCount} photos")
-
-    // Process ALL photos - no filtering
-    for (i in 0 until cloudPhotos.itemCount) {
-        val photo = cloudPhotos.peek(i)
-        if (photo != null) {
-            val dateLabel = formatRemotePhotoDate(photo.uploadedAt)
-            photosByDate.getOrPut(dateLabel) { mutableListOf() }.add(photo to i)
-            processedCount++
-        } else {
-            skippedCount++
-        }
+    for (i in allPhotos.indices) {
+        val photo = allPhotos[i]
+        val dateLabel = formatRemotePhotoDate(photo.uploadedAt)
+        photosByDate.getOrPut(dateLabel) { mutableListOf() }.add(photo to i)
     }
-
-    Log.d(TAG, "✅ Remote date grouping complete: $processedCount processed, $skippedCount skipped")
 
     // Convert to sorted list of RemoteDateGroups (most recent first)
     return photosByDate.map { (dateLabel, photos) ->
@@ -158,17 +146,13 @@ private fun groupRemotePhotosByDateOptimized(
 }
 
 private fun createRemoteLayoutCache(
-    cloudPhotos: LazyPagingItems<RemotePhoto>
+    allPhotos: List<RemotePhoto>
 ): RemoteLayoutCache {
-    val startTime = System.currentTimeMillis()
-
-    val normalGridItems = (0 until cloudPhotos.itemCount).mapNotNull { index ->
-        cloudPhotos.peek(index)?.let { photo ->
-            RemoteGridItem.PhotoItem(photo, index)
-        }
+    val normalGridItems = allPhotos.mapIndexed { index, photo ->
+        RemoteGridItem.PhotoItem(photo, index)
     }
 
-    val dateGroups = groupRemotePhotosByDateOptimized(cloudPhotos)
+    val dateGroups = groupRemotePhotosByDateOptimized(allPhotos)
     val dateGroupedItems = mutableListOf<RemoteGridItem>()
 
     dateGroups.forEachIndexed { groupIndex, dateGroup ->
@@ -196,7 +180,7 @@ private fun createRemoteLayoutCache(
         dateGroupedItems = dateGroupedItems,
         idToNormalIndex = idToNormalIndex,
         idToDateGroupedIndex = idToDateGroupedIndex,
-        totalPhotos = cloudPhotos.itemCount,
+        totalPhotos = allPhotos.size,
         lastUpdateTime = System.currentTimeMillis()
     )
 }
@@ -204,7 +188,8 @@ private fun createRemoteLayoutCache(
 @OptIn(ExperimentalAnimationApi::class, ExperimentalSharedTransitionApi::class, ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class, kotlinx.coroutines.FlowPreview::class)
 @Composable
 fun RemotePhotosGrid(
-    cloudPhotos: LazyPagingItems<RemotePhoto>,
+    cloudPhotos: LazyPagingItems<RemotePhoto>? = null,
+    allPhotos: List<RemotePhoto> = emptyList(),
     onPhotoClick: (Int, RemotePhoto?) -> Unit,
     topicAlbums: List<AlbumInfo> = emptyList(),
     selectedTopicAlbumId: Long = -1L,
@@ -265,9 +250,9 @@ fun RemotePhotosGrid(
         mutableStateOf(RemoteLayoutCache(emptyList(), emptyList(), emptyMap(), emptyMap(), 0, 0L)) 
     }
 
-    LaunchedEffect(cloudPhotos.itemSnapshotList, isDateGroupedLayout) {
+    LaunchedEffect(allPhotos, isDateGroupedLayout) {
         withContext(Dispatchers.Default) {
-            val newCache = createRemoteLayoutCache(cloudPhotos)
+            val newCache = createRemoteLayoutCache(allPhotos)
             withContext(Dispatchers.Main) {
                 layoutCache = newCache
             }
@@ -421,11 +406,12 @@ fun RemotePhotosGrid(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        if (cloudPhotos.loadState.refresh == LoadState.Loading && cloudPhotos.itemCount == 0) {
+        val isPagingLoading = cloudPhotos?.loadState?.refresh is LoadState.Loading
+        if (isPagingLoading && allPhotos.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 LoadAnimation()
             }
-        } else if (cloudPhotos.itemCount == 0 && cloudPhotos.loadState.refresh is LoadState.NotLoading) {
+        } else if (allPhotos.isEmpty() && (!isPagingLoading || cloudPhotos == null)) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 ExpressiveEmptyState(
                     icon = Icons.Rounded.Cloud,
@@ -445,13 +431,13 @@ fun RemotePhotosGrid(
             )
 
             val pullToRefreshState = rememberPullToRefreshState()
-            val isRefreshing = cloudPhotos.loadState.refresh is LoadState.Loading && cloudPhotos.itemCount > 0
+            val isRefreshing = cloudPhotos?.loadState?.refresh is LoadState.Loading && allPhotos.isNotEmpty()
 
             PullToRefreshBox(
                 isRefreshing = isRefreshing,
                 onRefresh = {
                     if (!selectionMode) {
-                        cloudPhotos.refresh()
+                        cloudPhotos?.refresh()
                     }
                 },
                 modifier = Modifier.fillMaxSize(),
