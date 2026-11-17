@@ -17,7 +17,7 @@ android {
         minSdk = 35  // Android 15 (Target requirement)
         targetSdk = 36  // Updated to target Android 15 (latest stable)
         versionCode = 8
-        versionName = "0.7"
+        versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true

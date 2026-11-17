@@ -45,8 +45,6 @@ import com.gallerysync.app.utils.MetadataConfig
 import com.gallerysync.app.utils.toastFromMainThread
 import com.gallerysync.app.workers.WorkModule
 import com.gallerysync.app.data.mediastore.AlbumInfo
-import com.gallerysync.app.ui.components.DonateBottomSheet
-import com.gallerysync.app.ui.components.MoreAppsBottomSheet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -313,30 +311,7 @@ fun SettingsScreen(modifier: Modifier = Modifier.clip(RoundedCornerShape(32.dp))
         )
     }
 
-    // Bottom Sheet States
-    var showMoreAppsSheet by remember { mutableStateOf(false) }
-    var showDonateSheet by remember { mutableStateOf(false) }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    if (showMoreAppsSheet) {
-        MoreAppsBottomSheet(
-            onDismiss = { showMoreAppsSheet = false },
-            onAppSelected = { href ->
-                showMoreAppsSheet = false
-                openLinkFromHref(href)
-            }
-        )
-    }
-
-    if (showDonateSheet) {
-        DonateBottomSheet(
-            onDismiss = { showDonateSheet = false },
-            onDonateOptionSelected = { href ->
-                showDonateSheet = false
-                openLinkFromHref(href)
-            }
-        )
-    }
 
 
 
@@ -1063,13 +1038,6 @@ fun SettingsScreen(modifier: Modifier = Modifier.clip(RoundedCornerShape(32.dp))
             ) {
                 Column {
                     SettingsItem(
-                        icon = Icons.Rounded.Android,
-                        title = "More Apps",
-                        subtitle = "More Apps by AKS-Labs",
-                        onClick = { showMoreAppsSheet = true }
-                    )
-
-                    SettingsItem(
                         iconPainter = painterResource(id = R.drawable.telegram),
                         title = "Join Telegram",
                         subtitle = "Support and community",
@@ -1097,14 +1065,6 @@ fun SettingsScreen(modifier: Modifier = Modifier.clip(RoundedCornerShape(32.dp))
                         title = "License",
                         subtitle = "GPL-3.0 license",
                         onClick = { openLinkFromHref(Constants.LICENSE) }
-                    )
-
-                    SettingsItem(
-                        iconPainter = painterResource(id = R.drawable.donation),
-                        title = "Donate",
-                        subtitle = "Support the development",
-                        iconColor = MaterialTheme.colorScheme.primary,
-                        onClick = { showDonateSheet = true }
                     )
                 }
             }
