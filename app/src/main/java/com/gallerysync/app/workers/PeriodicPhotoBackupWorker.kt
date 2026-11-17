@@ -303,10 +303,28 @@ class PeriodicPhotoBackupWorker(
             // Fall back to user-configured forum topic ID if no bucket topic was resolved
             val effectiveTopicId = messageThreadId ?: Preferences.getEncryptedTopicId()
 
-            // 5. Image preview upload (images only)
+            // 5. Preview upload:
+            // For videos: Always extract and upload a 20-40 KB video frame thumbnail
+            // For images: Generate and upload preview if isSyncImagePreviewEnabled() is true
             var previewId: String? = null
             var previewMessageId: Long? = null
-            if (queueItem.mediaType != "VIDEO" && isSyncImagePreviewEnabled()) {
+            val isVideoItem = queueItem.mediaType == "VIDEO" || current.mediaType == "VIDEO" || current.photoType in listOf("mp4", "mkv", "mov", "webm", "3gp", "avi", "flv")
+            if (isVideoItem) {
+                try {
+                    val previewFile = com.gallerysync.app.utils.generateVideoPreview(appContext, uri)
+                    if (previewFile != null) {
+                        val result = uploadPreviewFile(botApi, channelId, previewFile, hash, effectiveTopicId, topicName)
+                        previewId = result.first
+                        previewMessageId = result.second
+                        if (previewId != null) {
+                            photoDao.updatePreviewRemoteId(current.localId, previewId)
+                        }
+                        previewFile.delete()
+                    }
+                } catch (e: Throwable) {
+                    Log.e("PeriodicBackup", "Video preview upload failed for ${queueItem.localId}, continuing", e)
+                }
+            } else if (isSyncImagePreviewEnabled()) {
                 try {
                     val previewFile = generatePreview(appContext, uri)
                     if (previewFile != null) {
@@ -366,6 +384,8 @@ class PeriodicPhotoBackupWorker(
                                                 messageId = manifestRes.manifestReference.messageId
                                             )
                                             try {
+                                                val existingPreviewId = photoDao.getPhotoByLocalId(current.localId)?.previewRemoteId
+                                                val finalPreviewId = previewId ?: existingPreviewId
                                                 val remote = RemotePhoto(
                                                     remoteId = manifestRes.manifestReference.fileId,
                                                     photoType = "mp4",
@@ -381,10 +401,11 @@ class PeriodicPhotoBackupWorker(
                                                     height = current.height,
                                                     duration = current.duration,
                                                     status = "ACTIVE",
-                                                    uploadedByDevice = Preferences.getOrCreateDeviceId()
+                                                    uploadedByDevice = Preferences.getOrCreateDeviceId(),
+                                                    previewRemoteId = finalPreviewId
                                                 )
                                                 DbHolder.database.remotePhotoDao().insertAll(remote)
-                                                Log.i("PeriodicBackup", "Registered chunked video in remote_photos: fileId=${manifestRes.manifestReference.fileId}")
+                                                Log.i("PeriodicBackup", "Registered chunked video in remote_photos: fileId=${manifestRes.manifestReference.fileId}, previewRemoteId=$finalPreviewId")
                                             } catch (e: Exception) {
                                                 Log.e("PeriodicBackup", "Failed to register RemotePhoto for chunked video: ${e.message}", e)
                                             }

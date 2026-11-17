@@ -33,6 +33,8 @@ import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.CloudUpload
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.core.net.toUri
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -75,6 +77,7 @@ import com.gallerysync.app.ui.components.AlbumChipBar
 import com.gallerysync.app.ui.components.DragSelectableLazyVerticalGrid
 import com.gallerysync.app.ui.components.ExpressiveScrollbar
 import com.gallerysync.app.R
+import com.gallerysync.app.data.localdb.DbHolder
 import com.gallerysync.app.data.localdb.entities.Photo
 import com.gallerysync.app.data.localdb.entities.RemotePhoto
 import com.gallerysync.app.ui.components.LoadAnimation
@@ -190,6 +193,7 @@ private fun createRemoteLayoutCache(
 fun RemotePhotosGrid(
     cloudPhotos: LazyPagingItems<RemotePhoto>? = null,
     allPhotos: List<RemotePhoto> = emptyList(),
+    localPhotoMap: Map<String, String> = emptyMap(),
     onPhotoClick: (Int, RemotePhoto?) -> Unit,
     topicAlbums: List<AlbumInfo> = emptyList(),
     selectedTopicAlbumId: Long = -1L,
@@ -550,6 +554,7 @@ fun RemotePhotosGrid(
                                     isSelected = isSelected,
                                     isScrollbarDragging = isScrollbarDragging,
                                     thumbnailResolution = thumbnailResolution,
+                                    localPhotoMap = localPhotoMap,
                                     sharedTransitionScope = sharedTransitionScope,
                                     animatedVisibilityScope = animatedVisibilityScope,
                                     modifier = Modifier.clickable(
@@ -585,6 +590,7 @@ fun CloudPhotoItem(
     isSelected: Boolean,
     isScrollbarDragging: Boolean = false,
     thumbnailResolution: Int = 150,
+    localPhotoMap: Map<String, String> = emptyMap(),
     sharedTransitionScope: SharedTransitionScope,
     animatedVisibilityScope: AnimatedVisibilityScope,
     modifier: Modifier = Modifier
@@ -608,6 +614,29 @@ fun CloudPhotoItem(
         label = "item_entrance"
     )
 
+    // Local file / thumbnail fallback: 0 KB network cost and instant load
+    val inMemoryLocalUri = remember(remotePhoto?.localId, remotePhoto?.remoteId, localPhotoMap) {
+        remotePhoto?.localId?.let { localPhotoMap[it] } 
+            ?: remotePhoto?.remoteId?.let { localPhotoMap[it] }
+    }
+    var localResolvedUri by remember(remotePhoto?.localId) { mutableStateOf(inMemoryLocalUri) }
+
+    LaunchedEffect(remotePhoto?.localId, inMemoryLocalUri) {
+        if (localResolvedUri == null && remotePhoto?.localId != null) {
+            val found: String? = withContext(Dispatchers.IO) {
+                DbHolder.database.photoDao().getByLocalId(remotePhoto.localId)?.pathUri
+            }
+            if (found != null) {
+                localResolvedUri = found
+            }
+        }
+    }
+
+    val effectiveLocalUri = localResolvedUri ?: inMemoryLocalUri
+    val isVideo = remotePhoto?.mediaType == "VIDEO"
+    val fileId = if (isVideo) remotePhoto?.previewRemoteId else (remotePhoto?.previewRemoteId ?: remotePhoto?.remoteId)
+    val hasThumbnail = effectiveLocalUri != null || fileId != null
+
     with(sharedTransitionScope) {
         Box(
             modifier = modifier
@@ -623,7 +652,6 @@ fun CloudPhotoItem(
                 .aspectRatio(1f)
                 .graphicsLayer {
                     val entrance = if (skipEntrance) 1f else animatedValues
-                    // Removed alpha = entrance to keep placeholder icon visible
                     scaleX = 0.92f + 0.08f * entrance
                     scaleY = 0.92f + 0.08f * entrance
                     translationY = (1f - entrance) * 15f
@@ -639,41 +667,95 @@ fun CloudPhotoItem(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            // Restore: Circular LoadAnimation for remote items
-            LoadAnimation(modifier = Modifier.size(48.dp))
-
             if (remotePhoto != null) {
-                val isVideo = remotePhoto.mediaType == "VIDEO"
-                val fileId = if (isVideo) remotePhoto.previewRemoteId else (remotePhoto.previewRemoteId ?: remotePhoto.remoteId)
-                val imageRequest = remember(fileId) {
-                    ImageRequest.Builder(context)
-                        .data(fileId?.let { com.gallerysync.app.utils.coil.FileIdData(it) })
-                        .size(180, 180)
-                        .apply {
-                            if (fileId != null) {
-                                memoryCacheKey("fid_${fileId}_180")
-                                diskCacheKey("fid_$fileId")
+                if (isVideo && !hasThumbnail) {
+                    // Video without thumbnail: display play button centered on container (no infinite loader)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = CircleShape,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Rounded.PlayArrow,
+                                    contentDescription = "Play Video",
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(28.dp)
+                                )
                             }
                         }
-                        .allowHardware(true)
-                        .bitmapConfig(android.graphics.Bitmap.Config.RGB_565)
-                        .crossfade(200)
-                        .build()
+                    }
+                } else {
+                    // Display loading animation while thumbnail loads
+                    LoadAnimation(modifier = Modifier.size(48.dp))
+
+                    val imageRequest = remember(effectiveLocalUri, fileId) {
+                        if (effectiveLocalUri != null) {
+                            // Local fallback: load local image/video thumbnail with 0 network bytes
+                            ImageRequest.Builder(context)
+                                .data(effectiveLocalUri.toUri())
+                                .size(180, 180)
+                                .allowHardware(true)
+                                .bitmapConfig(android.graphics.Bitmap.Config.RGB_565)
+                                .crossfade(200)
+                                .build()
+                        } else {
+                            // Remote fallback: fetch from Telegram disk cache or network
+                            ImageRequest.Builder(context)
+                                .data(fileId?.let { com.gallerysync.app.utils.coil.FileIdData(it) })
+                                .size(180, 180)
+                                .apply {
+                                    if (fileId != null) {
+                                        memoryCacheKey("fid_${fileId}_180")
+                                        diskCacheKey("fid_$fileId")
+                                    }
+                                }
+                                .allowHardware(true)
+                                .bitmapConfig(android.graphics.Bitmap.Config.RGB_565)
+                                .crossfade(200)
+                                .build()
+                        }
+                    }
+                    
+                    AsyncImage(
+                        imageLoader = if (effectiveLocalUri != null) ImageLoaderModule.defaultImageLoader else ImageLoaderModule.thumbnailImageLoader,
+                        model = imageRequest,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                alpha = if (skipEntrance) 1f else animatedValues
+                            },
+                        contentDescription = stringResource(id = R.string.photo),
+                        placeholder = null
+                    )
+
+                    // Video overlay badge if video has a thumbnail
+                    if (isVideo) {
+                        Surface(
+                            color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.5f),
+                            shape = CircleShape,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .align(Alignment.Center)
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Rounded.PlayArrow,
+                                    contentDescription = "Play Video",
+                                    tint = androidx.compose.ui.graphics.Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
                 }
-                
-                AsyncImage(
-                    imageLoader = ImageLoaderModule.thumbnailImageLoader,
-                    model = imageRequest,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            // Apply entrance alpha ONLY to the image
-                            alpha = if (skipEntrance) 1f else animatedValues
-                        },
-                    contentDescription = stringResource(id = R.string.photo),
-                    placeholder = null
-                )
 
                 // Selection Tonal Overlay
                 if (isSelected) {

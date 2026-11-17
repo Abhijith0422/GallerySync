@@ -229,6 +229,33 @@ object TelegramUploadDispatcher {
             // 5. Build caption with metadata and tags
             val caption = buildCaption(context, photo, uri)
 
+            // 5b. Generate & upload 20-40 KB video frame thumbnail preview if not already provided
+            var effectivePreviewId = previewId
+            var effectivePreviewMessageId = previewMessageId
+            if (dispatchType != UploadDispatchType.DOCUMENT_IMAGE && effectivePreviewId == null) {
+                try {
+                    val vPreview = com.gallerysync.app.utils.generateVideoPreview(context, uri)
+                    if (vPreview != null) {
+                        val (uploadedPId, uploadedPMsgId) = com.gallerysync.app.utils.uploadPreviewFile(
+                            botApi = botApi,
+                            channelId = channelId,
+                            file = vPreview,
+                            contentHash = photo.contentHash,
+                            messageThreadId = messageThreadId,
+                            topicName = topicName
+                        )
+                        effectivePreviewId = uploadedPId
+                        effectivePreviewMessageId = uploadedPMsgId
+                        if (uploadedPId != null) {
+                            DbHolder.database.photoDao().updatePreviewRemoteId(photo.localId, uploadedPId)
+                        }
+                        vPreview.delete()
+                    }
+                } catch (e: Throwable) {
+                    Log.w(TAG, "Failed generating video preview for direct upload ${photo.localId}", e)
+                }
+            }
+
             // 6. Execute dispatch to Telegram API
             val (message, uploadError, uploadedToTopic) = executeDispatch(
                 botApi = botApi,
@@ -237,7 +264,7 @@ object TelegramUploadDispatcher {
                 dispatchType = dispatchType,
                 photo = photo,
                 caption = caption,
-                previewMessageId = previewMessageId,
+                previewMessageId = effectivePreviewMessageId,
                 messageThreadId = messageThreadId,
                 topicName = topicName
             )
@@ -255,7 +282,7 @@ object TelegramUploadDispatcher {
 
             // Extract thumbnail ID from video or document response, or keep existing previewId if provided
             val extractedThumbId = extractPreviewRemoteId(message)
-            val effectivePreviewRemoteId = extractedThumbId ?: previewId
+            val effectivePreviewRemoteId = extractedThumbId ?: effectivePreviewId
 
             saveRemotePhoto(
                 photo = photo,

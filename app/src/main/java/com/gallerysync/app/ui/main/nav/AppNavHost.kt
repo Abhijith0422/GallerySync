@@ -158,6 +158,7 @@ fun AppNavHost(
             val allCloudPhotosList by viewModel.allCloudPhotosList.collectAsStateWithLifecycle()
             val totalCloudPhotosCount by viewModel.totalCloudPhotosCount.collectAsStateWithLifecycle()
             val lastViewedId by viewModel.lastViewedPhotoId.collectAsStateWithLifecycle()
+            val localPhotoMap by viewModel.localPhotoMap.collectAsStateWithLifecycle()
 
             val topicAlbums by viewModel.topicAlbums.collectAsStateWithLifecycle()
             val selectedTopicAlbumId by viewModel.selectedTopicAlbumId.collectAsStateWithLifecycle()
@@ -165,6 +166,7 @@ fun AppNavHost(
             RemotePhotosGrid(
                 cloudPhotos = allCloudPhotos,
                 allPhotos = allCloudPhotosList,
+                localPhotoMap = localPhotoMap,
                 onPhotoClick = { _, photo -> 
                     photo?.let { 
                         viewModel.updateLastViewedPhotoId(it.remoteId)

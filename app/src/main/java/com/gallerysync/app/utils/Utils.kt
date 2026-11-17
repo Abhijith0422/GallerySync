@@ -23,6 +23,7 @@ import com.gallerysync.app.data.localdb.entities.Photo
 import com.gallerysync.app.data.localdb.entities.RemotePhoto
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.random.Random
@@ -357,6 +358,54 @@ suspend fun generatePreview(
     } catch (e: Exception) {
         Log.e("Preview", "Failed to generate preview", e)
         null
+    }
+}
+
+/**
+ * Extracts a frame from a video file/URI and compresses it to a lightweight thumbnail (typically 20-40 KB).
+ */
+suspend fun generateVideoPreview(
+    context: Context,
+    uri: Uri,
+    maxDimension: Int = 360,
+    quality: Int = 75
+): File? = withContext(Dispatchers.IO) {
+    var retriever: MediaMetadataRetriever? = null
+    try {
+        retriever = MediaMetadataRetriever()
+        retriever.setDataSource(context, uri)
+        
+        // Extract frame at 1 second or sync frame
+        val bitmap = retriever.getFrameAtTime(1_000_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            ?: retriever.getFrameAtTime(0)
+            ?: return@withContext null
+            
+        val scale = minOf(
+            maxDimension.toFloat() / bitmap.width,
+            maxDimension.toFloat() / bitmap.height,
+            1.0f
+        )
+        val newWidth = (bitmap.width * scale).toInt().coerceAtLeast(1)
+        val newHeight = (bitmap.height * scale).toInt().coerceAtLeast(1)
+        
+        val scaled = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+        if (scaled != bitmap) bitmap.recycle()
+        
+        val tempFile = File.createTempFile("vpreview_", ".jpg")
+        FileOutputStream(tempFile).use { out ->
+            scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
+        }
+        scaled.recycle()
+        
+        Log.i("Preview", "Generated video preview thumbnail: ${tempFile.length()} bytes (${newWidth}x${newHeight})")
+        tempFile
+    } catch (e: Exception) {
+        Log.e("Preview", "Failed to generate video preview for $uri", e)
+        null
+    } finally {
+        try {
+            retriever?.release()
+        } catch (_: Exception) {}
     }
 }
 

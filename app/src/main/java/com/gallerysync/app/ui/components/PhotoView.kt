@@ -603,22 +603,11 @@ fun PhotoView(
                 }
             }
         } else {
+            val effectiveLocalPath = localPlaybackUriString ?: photo.pathUri.takeIf { it.isNotBlank() && LocalMediaUriValidator.isLocalMediaUri(it) }
+            val thumbFileId = photo.previewRemoteId ?: photo.remoteId
+
             with(sharedTransitionScope) {
-                SubcomposeAsyncImage(
-                    imageLoader = if (isOnlyRemote) ImageLoaderModule.remoteImageLoader else ImageLoaderModule.defaultImageLoader,
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(if (isOnlyRemote) com.gallerysync.app.utils.coil.FileIdData(photo.remoteId!!) else photo.pathUri)
-                        .memoryCacheKey(if (isOnlyRemote) "fid_${photo.remoteId}_full" else null)
-                        .diskCacheKey(if (isOnlyRemote) "fid_${photo.remoteId}" else null)
-                        .crossfade(500)
-                        .build(),
-                    contentDescription = "Photo",
-                    contentScale = ContentScale.Fit,
-                    loading = {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            androidx.compose.material3.ContainedLoadingIndicator()
-                        }
-                    },
+                Box(
                     modifier = Modifier
                         .sharedElement(
                             rememberSharedContentState(key = if (isOnlyRemote) "photo_${photo.remoteId}" else "photo_${photo.localId}"),
@@ -630,8 +619,75 @@ fun PhotoView(
                             detectTapGestures(
                                 onTap = { showUi = !showUi }
                             )
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (effectiveLocalPath != null) {
+                        // Local image: instant high-res render from device storage
+                        AsyncImage(
+                            imageLoader = ImageLoaderModule.defaultImageLoader,
+                            model = ImageRequest.Builder(LocalContext.current)
+                                .data(effectiveLocalPath.toUri())
+                                .crossfade(200)
+                                .build(),
+                            contentDescription = "Photo",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else if (photo.remoteId != null) {
+                        // Two-Tier Cloud Image Loading:
+                        // Tier 1: Immediately render low-res thumbnail from disk/memory cache
+                        if (thumbFileId != null) {
+                            AsyncImage(
+                                imageLoader = ImageLoaderModule.thumbnailImageLoader,
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(com.gallerysync.app.utils.coil.FileIdData(thumbFileId))
+                                    .memoryCacheKey("fid_${thumbFileId}_180")
+                                    .diskCacheKey("fid_$thumbFileId")
+                                    .build(),
+                                contentDescription = null,
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize()
+                            )
                         }
-                )
+
+                        // Tier 2: Stream full-resolution original from Telegram in background and crossfade
+                        var isFullLoaded by remember(photo.remoteId) { mutableStateOf(false) }
+
+                        AsyncImage(
+                            imageLoader = ImageLoaderModule.remoteImageLoader,
+                            model = ImageRequest.Builder(LocalContext.current)
+                                .data(com.gallerysync.app.utils.coil.FileIdData(photo.remoteId))
+                                .memoryCacheKey("fid_${photo.remoteId}_full")
+                                .diskCacheKey("fid_${photo.remoteId}")
+                                .crossfade(400)
+                                .listener(
+                                    onSuccess = { _, _ -> isFullLoaded = true },
+                                    onError = { _, _ -> isFullLoaded = true }
+                                )
+                                .build(),
+                            contentDescription = "Photo",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize()
+                        )
+
+                        // Subtle progress indicator while high-res original streams in background
+                        if (!isFullLoaded) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(bottom = 100.dp),
+                                contentAlignment = Alignment.BottomCenter
+                            ) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Color.White.copy(alpha = 0.7f)
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 

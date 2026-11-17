@@ -216,6 +216,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .map { list -> list.map { it.toPhoto() } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     }
+
+    val localPhotoMap: StateFlow<Map<String, String>> by lazy {
+        allLocalPhotos.map { list ->
+            val map = HashMap<String, String>(list.size * 2)
+            list.forEach { p ->
+                if (p.localId.isNotBlank()) map[p.localId] = p.pathUri
+                if (!p.remoteId.isNullOrBlank()) map[p.remoteId!!] = p.pathUri
+            }
+            map
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+    }
     // Track the last viewed photo ID to sync grid position on return
     private val _lastViewedPhotoId = MutableStateFlow<String?>(null)
     val lastViewedPhotoId: StateFlow<String?> = _lastViewedPhotoId.asStateFlow()

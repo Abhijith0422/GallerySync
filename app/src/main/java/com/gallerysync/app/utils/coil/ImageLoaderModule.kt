@@ -94,21 +94,22 @@ object ImageLoaderModule {
             .build()
         Log.i(TAG, "thumbnailImageLoader created successfully")
 
-        // Register memory trimmer — clears caches based on severity level
+        // Register memory trimmer — clears RAM caches based on severity level.
+        // Disk cache is strictly preserved across backgrounding and restarts.
         appContext.registerComponentCallbacks(object : ComponentCallbacks2 {
             override fun onTrimMemory(level: Int) {
                 Log.d(TAG, "Trimming memory: level=$level")
                 when {
                     level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> {
-                        Log.w(TAG, "Process about to be killed — clearing all caches including disk")
-                        clearAllCaches(clearDisk = true)
+                        Log.w(TAG, "Process about to be killed / backgrounded — clearing RAM memory caches only")
+                        clearMemoryCaches()
                     }
                     level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE -> {
-                        Log.w(TAG, "Moderate memory pressure — clearing memory caches")
+                        Log.w(TAG, "Moderate memory pressure — clearing RAM memory caches")
                         clearMemoryCaches()
                     }
                     level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> {
-                        Log.i(TAG, "App in background — clearing memory caches")
+                        Log.i(TAG, "App in background — clearing RAM memory caches")
                         clearMemoryCaches()
                     }
                     else -> {
@@ -119,8 +120,8 @@ object ImageLoaderModule {
             }
             override fun onConfigurationChanged(newConfig: Configuration) {}
             override fun onLowMemory() {
-                Log.w(TAG, "CRITICAL: Low memory, clearing all caches")
-                clearAllCaches(clearDisk = false)
+                Log.w(TAG, "CRITICAL: Low memory, clearing RAM memory caches")
+                clearMemoryCaches()
             }
         })
 
